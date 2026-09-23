@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "RFC 6455 public example WebSocket nonce used by handshake fixtures"
+regexes = ['''dGhlIHNhbXBsZSBub25jZQ==''']

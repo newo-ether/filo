@@ -1,0 +1,20 @@
+.harness/
+dist/
+.env
+.filo-token
+
+# Private runtime state and local build evidence
+.env.*
+env.txt
+*.pem
+*.key
+*.log
+work/
+artifacts/
+*.exe
+*.zip
+
+# Local agent instructions must never enter public source or bundles
+AGENTS.md
+HARNESS.md
+REDLINES.md

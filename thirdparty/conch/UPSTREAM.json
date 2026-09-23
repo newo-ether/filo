@@ -1,0 +1,65 @@
+{
+    "revision":  "f7edc900b2365f2c337b0bda8528d5193ac35bbd",
+    "files":  [
+                  {
+                      "path":  "go.mod",
+                      "sha256":  "da92d571e6852460d2d9ed014616cf41178723b4314b70f7673d7bd457ac63af"
+                  },
+                  {
+                      "path":  "go.sum",
+                      "sha256":  "c9391bdfd81a60158814fdf478ef87f4d5e207a81e2fe223270d1fbd3d8eeeb5"
+                  },
+                  {
+                      "path":  "LICENSE",
+                      "sha256":  "31db47c4ccf8c30eca17076e84f1171f4d8aeabea66e7afb5d4a1980326c464c"
+                  },
+                  {
+                      "path":  "crypto/encrypt.go",
+                      "sha256":  "0bbf1c82d913dd316a877a824afc8ee7dcf1b5fa29b9312a9075eaf444439144"
+                  },
+                  {
+                      "path":  "crypto/event.go",
+                      "sha256":  "cb08588e34d20ef69d80bc88063f79d4deb787a0aedaee18946788e14adf8915"
+                  },
+                  {
+                      "path":  "crypto/handshake.go",
+                      "sha256":  "a681ed8e873d5ed60ed7650d476ecc06ee1b64d77538186cda78bd2ac96ce69c"
+                  },
+                  {
+                      "path":  "crypto/keys.go",
+                      "sha256":  "577fdf20524a8631feb380cf8d56762f3bb71480e6cf4147cc6aea30b7ed3100"
+                  },
+                  {
+                      "path":  "crypto/nonce_tracker.go",
+                      "sha256":  "7f4768cb482fa83a2711852bed54e0eb7f88c25f07b09e02c5389ebf5fceb67e"
+                  },
+                  {
+                      "path":  "crypto/rejection.go",
+                      "sha256":  "ea736c871c5ccec019a64769b33bdf7d3c82a11d7639aded05dc5997d66b449a"
+                  },
+                  {
+                      "path":  "crypto/response.go",
+                      "sha256":  "7dd9832f430dbaf4a32f908f3764721bc94fb9e68174111ca2fce6ccb6b8ff86"
+                  },
+                  {
+                      "path":  "crypto/sign.go",
+                      "sha256":  "6169f57e1a11fe776d9cfd02080414cf5e8a6ee1f9de389a79256f550a0d1ac1"
+                  },
+                  {
+                      "path":  "encryptedhttp/auth.go",
+                      "sha256":  "a2097916a75f4be2526d275df38d8fc67ab4d5b568d3237066e954dab7aab7e4"
+                  },
+                  {
+                      "path":  "encryptedhttp/client.go",
+                      "sha256":  "aaa2e656284560fd3d7a80fdf77dfa40bad58ecb45688c0ebecf0ba86480e907"
+                  },
+                  {
+                      "path":  "encryptedhttp/client_body.go",
+                      "sha256":  "933599b2e7c42133f1bf4f272cf6b730d3b69251bc483b4bd3097519209ff842"
+                  },
+                  {
+                      "path":  "encryptedhttp/gateway.go",
+                      "sha256":  "844585be69b734698e14798bb6f720105fddd067df25fdd246fd6733c0387e98"
+                  }
+              ]
+}
