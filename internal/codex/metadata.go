@@ -124,13 +124,44 @@ func (m *NativeMetadata) Archive(id string) (string, error) {
 	return *response.Thread.Cwd, nil
 }
 
+// maxModelPages bounds the model/list cursor walk against a server that never ends it.
+const maxModelPages = 100
+
+// Models returns the complete native model catalog. model/list is paginated, so
+// every page is read by following nextCursor until the server returns none.
 func (m *NativeMetadata) Models() ([]protocol.Model, error) {
-	value, err := m.rpc.Request("model/list", map[string]any{})
-	if err != nil {
-		return nil, err
+	models := []protocol.Model{}
+	seen := map[string]struct{}{}
+	params := map[string]any{}
+	for page := 0; ; page++ {
+		if page == maxModelPages {
+			return nil, errors.New("Native model catalog did not end")
+		}
+		value, err := m.rpc.Request("model/list", params)
+		if err != nil {
+			return nil, err
+		}
+		pageModels, next, err := decodeModelPage(value)
+		if err != nil {
+			return nil, err
+		}
+		models = append(models, pageModels...)
+		if next == nil || *next == "" {
+			return models, nil
+		}
+		if _, repeated := seen[*next]; repeated {
+			return nil, errors.New("Native model cursor did not advance")
+		}
+		seen[*next] = struct{}{}
+		params = map[string]any{"cursor": *next}
 	}
+}
+
+// decodeModelPage converts one model/list page and returns its next cursor.
+func decodeModelPage(value any) ([]protocol.Model, *string, error) {
 	var response struct {
-		Data []struct {
+		NextCursor *string `json:"nextCursor"`
+		Data       []struct {
 			Model                     string        `json:"model"`
 			DisplayName               protocol.Text `json:"displayName"`
 			IsDefault                 bool          `json:"isDefault"`
@@ -143,10 +174,10 @@ func (m *NativeMetadata) Models() ([]protocol.Model, error) {
 		} `json:"data"`
 	}
 	if err := decodeMetadata(value, &response); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if response.Data == nil {
-		return nil, errors.New("Native model catalog is unavailable")
+		return nil, nil, errors.New("Native model catalog is unavailable")
 	}
 	models := make([]protocol.Model, 0, len(response.Data))
 	for _, native := range response.Data {
@@ -160,7 +191,7 @@ func (m *NativeMetadata) Models() ([]protocol.Model, error) {
 		models = append(models, protocol.Model{ID: native.Model, Name: native.DisplayName, IsDefault: native.IsDefault,
 			ReasoningEfforts: efforts, DefaultReasoningEffort: native.DefaultReasoningEffort, ServiceTiers: native.ServiceTiers, DefaultServiceTier: native.DefaultServiceTier})
 	}
-	return models, nil
+	return models, response.NextCursor, nil
 }
 
 func (m *NativeMetadata) PrepareShutdown() error {
