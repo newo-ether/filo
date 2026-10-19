@@ -147,11 +147,12 @@ function Assert-FiloPrivatePath {
 function Grant-FiloDirectoryRead {
     param([string]$Path, [string]$UserSid)
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    $acl = Get-Acl -LiteralPath $Path
+    # Persist only the DACL; owner and audit sections are unrelated to traversal.
+    $acl = [IO.Directory]::GetAccessControl($Path, [Security.AccessControl.AccessControlSections]::Access)
     # The user-scoped helper traverses every parent directory to reach its scripts. This folder-only grant must not expose private descendants.
     $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
         [Security.Principal.SecurityIdentifier]::new($UserSid), 'ReadAndExecute', 'None', 'None', 'Allow'))
-    Set-Acl -LiteralPath $Path -AclObject $acl
+    [IO.Directory]::SetAccessControl($Path, $acl)
 }
 function Install-FiloRuntime {
     param([string]$Bundle, $Manifest, [string]$Root, [string]$Sid)

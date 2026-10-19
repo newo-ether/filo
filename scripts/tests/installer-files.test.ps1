@@ -59,15 +59,23 @@ try {
     [IO.File]::WriteAllText($tokenPath,'broken')
     Rejects { New-FiloToken $tokenPath }
     Assert ([IO.File]::ReadAllText($tokenPath) -eq 'broken') 'Invalid prior token must remain unchanged'
-    $tokenAcl = (Get-Acl -LiteralPath $tokenPath).Sddl
-    Grant-FiloDirectoryRead $fixture $sid
-    Grant-FiloDirectoryRead $fixture $sid
-    $grants = @((Get-Acl -LiteralPath $fixture).GetAccessRules($true,$false,[Security.Principal.SecurityIdentifier]) |
-        Where-Object { $_.IdentityReference.Value -eq $sid })
-    Assert ($grants.Count -eq 1) 'Directory-read migration must be idempotent'
-    Assert ($grants[0].InheritanceFlags -eq 'None') 'Traversal grant must not propagate to private descendants'
-    Assert ($grants[0].FileSystemRights -eq 'ReadAndExecute, Synchronize') 'Selected user receives read/execute only'
-    Assert ((Get-Acl -LiteralPath $tokenPath).Sddl -eq $tokenAcl) 'Existing token permissions must stay unchanged'
+    # Cover inherited host permissions and the protected state used by production.
+    $privateState = Join-Path $fixture 'private-state'
+    Protect-FiloDirectory $privateState ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+    New-FiloToken (Join-Path $privateState 'token')
+    foreach ($directory in @($fixture, $privateState)) {
+        $protectedToken = Join-Path $directory 'token'
+        $tokenAcl = (Get-Acl -LiteralPath $protectedToken).Sddl
+        Grant-FiloDirectoryRead $directory $sid
+        Grant-FiloDirectoryRead $directory $sid
+        $grants = @((Get-Acl -LiteralPath $directory).GetAccessRules($true,$false,[Security.Principal.SecurityIdentifier]) |
+            Where-Object { $_.IdentityReference.Value -eq $sid })
+        Assert ($grants.Count -eq 1) 'Directory-read migration must be idempotent'
+        Assert ($grants[0].InheritanceFlags -eq 'None') 'Traversal grant must not propagate to private descendants'
+        Assert ($grants[0].FileSystemRights -eq 'ReadAndExecute, Synchronize') 'Selected user receives read/execute only'
+        $tokenAclAfter = (Get-Acl -LiteralPath $protectedToken).Sddl
+        Assert ($tokenAclAfter -ceq $tokenAcl) "Existing token permissions must stay unchanged. Before: $tokenAcl; after: $tokenAclAfter"
+    }
     $config = Join-Path $fixture 'config.json'
     Write-FiloJson $config @{first=1}
     Write-FiloJson $config @{second=2}
