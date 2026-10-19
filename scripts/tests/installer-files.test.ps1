@@ -1,11 +1,23 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\windows\Install-Support.ps1')
 function Assert($Value, $Message) { if (-not $Value) { throw $Message } }
+function Get-PermissionSddl([string]$Sddl) {
+    # Windows may mark existing descendants auto-inherited when a parent ACL is
+    # persisted. Compare every ACE, owner/group and protection flag, excluding only
+    # that OS-managed marker (SE_DACL_AUTO_INHERITED), not permission contents.
+    $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($Sddl)
+    $descriptor.SetFlags($descriptor.ControlFlags -band
+        (-bnot [Security.AccessControl.ControlFlags]::DiscretionaryAclAutoInherited))
+    return $descriptor.GetSddlForm([Security.AccessControl.AccessControlSections]::All)
+}
 function Rejects([scriptblock]$Run) {
     $rejected = $false
     try { & $Run | Out-Null } catch { $rejected = $true }
     Assert $rejected 'Expected rejection'
 }
+Assert ((Get-PermissionSddl 'D:(A;;FA;;;SY)') -ceq (Get-PermissionSddl 'D:AI(A;;FA;;;SY)')) 'Auto-inheritance marker alone is permission-neutral'
+Assert ((Get-PermissionSddl 'D:(A;;FA;;;SY)') -cne (Get-PermissionSddl 'D:(A;;FA;;;SY)(A;;FR;;;WD)')) 'Additional access must remain detectable'
+Assert ((Get-PermissionSddl 'D:(A;;FA;;;SY)') -cne (Get-PermissionSddl 'D:P(A;;FA;;;SY)')) 'Inheritance protection must remain detectable'
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('filo-install-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture | Out-Null
 try {
@@ -74,7 +86,7 @@ try {
         Assert ($grants[0].InheritanceFlags -eq 'None') 'Traversal grant must not propagate to private descendants'
         Assert ($grants[0].FileSystemRights -eq 'ReadAndExecute, Synchronize') 'Selected user receives read/execute only'
         $tokenAclAfter = (Get-Acl -LiteralPath $protectedToken).Sddl
-        Assert ($tokenAclAfter -ceq $tokenAcl) "Existing token permissions must stay unchanged. Before: $tokenAcl; after: $tokenAclAfter"
+        Assert ((Get-PermissionSddl $tokenAclAfter) -ceq (Get-PermissionSddl $tokenAcl)) "Existing token permissions must stay unchanged. Before: $tokenAcl; after: $tokenAclAfter"
     }
     $config = Join-Path $fixture 'config.json'
     Write-FiloJson $config @{first=1}
