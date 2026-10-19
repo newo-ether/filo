@@ -404,8 +404,7 @@ func TestSessionMutationsValidateBeforeReachingNativeWrites(t *testing.T) {
 		}
 		response.Body.Close()
 	}
-	// A settings body is validated by the codex layer, so its refusal is the
-	// bounded RPC conflict the TS server reports through its outer handler.
+	// Codex validates the settings body; its refusal becomes a bounded RPC conflict.
 	settingsRefusal := post(t, base+"/settings", `{"effort":"high","unknown":1}`, authHeaders())
 	if settingsRefusal.StatusCode != http.StatusConflict {
 		t.Fatalf("settings refusal status = %d", settingsRefusal.StatusCode)
@@ -484,9 +483,7 @@ func (hooks *shutdownHookCount) read() int {
 	return hooks.count
 }
 
-// The TS route keys off the shutdown hook, not off the prepareShutdown
-// capability: a service with a hook but without the capability still answers
-// and simply skips the native preparation step.
+// The shutdown route requires a hook; native preparation is optional.
 func TestShutdownRequiresTheHookAndALocalCaller(t *testing.T) {
 	fake := &shutdownSessions{fakeSessions: newFakeSessions(1)}
 	stopped := &shutdownHookCount{}

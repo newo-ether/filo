@@ -162,8 +162,7 @@ func ReadExecutorFile(directory, name string) (any, error) {
 		return nil, err
 	}
 	defer file.Close()
-	// A bounded read also handles a concurrent writer growing the file after a
-	// stat, exactly as the TS reader does.
+	// A bounded read also handles a concurrent writer growing the file after stat.
 	buffer := make([]byte, maxExecutorFileBytes+1)
 	read, err := io.ReadFull(file, buffer)
 	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
@@ -204,8 +203,7 @@ func SaveExecutorFile(directory, name string, value any) error {
 		_ = file.Close()
 		return err
 	}
-	// The TS `flush: true` flag means the bytes reach the disk before the
-	// rename publishes them.
+	// Flush the bytes to disk before publishing the record through rename.
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
 		return err
@@ -279,7 +277,7 @@ func writeExclusive(path string, content []byte) error {
 	return file.Close()
 }
 
-// jsPid mirrors the TS pid guard: a positive safe integer.
+// jsPid admits positive JavaScript-safe integer process IDs.
 func jsPid(raw any) (int, bool) {
 	value, ok := raw.(float64)
 	if !ok || !isSafeInteger(value) || value <= 0 {
@@ -337,10 +335,8 @@ func loopbackEndpoint(value string) bool {
 	return err == nil && port > 0 && port <= 65535
 }
 
-// absoluteWorkspace mirrors the TS isAbsolute gate on the executor workspace.
-// Recorded divergence: Node's win32 rule also accepts a drive-less rooted path
-// such as `\workspace`, which filepath.IsAbs refuses, so that form is accepted
-// here too.
+// absoluteWorkspace accepts absolute executor workspaces, including Windows
+// drive-less rooted paths such as `\workspace`, which filepath.IsAbs rejects.
 func absoluteWorkspace(value string) bool {
 	if filepath.IsAbs(value) {
 		return true

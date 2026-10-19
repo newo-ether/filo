@@ -85,7 +85,7 @@ if ($LASTEXITCODE -ne 0 -or $goVersion -notmatch 'go version go([0-9.]+)') { thr
 $goVersion = $Matches[1]
 Push-Location $repo
 try {
-    # go vet also type-checks the test files, which is the check tsc used to provide.
+    # Vet also type-checks the test files before packaging.
     & $go vet ./...
     if ($LASTEXITCODE -ne 0) { throw 'Go vet failed' }
     & $go test -count=1 -timeout 300s ./internal/sourcebudget/

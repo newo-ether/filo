@@ -36,21 +36,16 @@ const (
 	// systemServiceCredentialRefusal rejects a helper credential path that is
 	// missing or not absolute.
 	systemServiceCredentialRefusal = "Invalid Filo helper credential path"
-	// systemServiceDesktopUnavailable is the single refusal of the desktop
-	// bridge. The TypeScript entry point raises it after its verification script
-	// has already tried to dial the pipe; Go dials and verifies in one step, so a
-	// missing pipe and a rejected account/application identity answer alike.
+	// systemServiceDesktopUnavailable reports a missing pipe or an unverified
+	// account/application identity; both refuse the desktop bridge.
 	systemServiceDesktopUnavailable = "Original Codex desktop is unavailable or its Windows account/application identity could not be verified"
 	// systemServiceDiagnosticPrefix leads the one startup failure line.
 	systemServiceDiagnosticPrefix = "Filo system service failed: "
-	// systemServiceDesktopTimeout bounds one desktop pipe dial, the same 5000 ms
-	// the TypeScript entry point passes to its IPC client.
+	// systemServiceDesktopTimeout bounds one desktop pipe dial.
 	systemServiceDesktopTimeout = 5 * time.Second
 )
 
-// systemServiceSIDPattern admits the two account families an original desktop can
-// belong to, exactly as the TypeScript entry point requires by regular
-// expression.
+// systemServiceSIDPattern admits local/domain and cloud account SID families.
 var systemServiceSIDPattern = regexp.MustCompile(`^S-1-(?:5-21|12-1)-[0-9-]+$`)
 
 // systemServiceOptions configures one desktop IPC gateway entry point.
@@ -94,9 +89,8 @@ type systemServiceReady struct {
 	Build   buildInfo `json:"build"`
 }
 
-// serveSystemService admits one desktop IPC gateway and blocks until it stops. A
-// startup failure is returned after every resource it created is released, which
-// is what the TypeScript `catch` around `listen` does.
+// serveSystemService admits one desktop IPC gateway and blocks until it stops.
+// Startup failures release every resource created before returning the error.
 func serveSystemService(options systemServiceOptions) error {
 	if options.Directory == "" || !filepath.IsAbs(options.Directory) {
 		return errors.New(systemServiceDirectoryRefusal)
@@ -261,9 +255,8 @@ func (holder *desktopSurface) get() *sessions.DesktopSessions {
 	return holder.current
 }
 
-// nativeHome resolves one original account home once and remembers it, which is
-// the memo the TypeScript entry point keeps in front of its script call. A failed
-// resolution is not remembered, so the next read tries again.
+// nativeHome resolves and caches one original account home. Failed resolutions
+// are not cached so a subsequent read can try again.
 func nativeHome(sid string) func(context.Context) (string, error) {
 	var mu sync.Mutex
 	var home string

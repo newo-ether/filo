@@ -26,8 +26,7 @@ const (
 	userWorkerUnavailable = "User agent unavailable"
 )
 
-// userWorkerCredentialPattern is the shared hexadecimal credential shape. The TS
-// literal carries the case-insensitive flag.
+// userWorkerCredentialPattern admits 256-bit hexadecimal credentials in either case.
 var userWorkerCredentialPattern = regexp.MustCompile(`(?i)^[a-f0-9]{64}$`)
 
 // UserWorkerHistory is the read-only native history behind one user worker. Live
@@ -44,8 +43,7 @@ type UserWorkerToken interface {
 	Credential(ctx context.Context) (string, error)
 }
 
-// UserWorkerTokenFunc adapts a credential lookup, which is the TS
-// `() => Promise<string>` form.
+// UserWorkerTokenFunc adapts a context-aware credential lookup.
 type UserWorkerTokenFunc func(ctx context.Context) (string, error)
 
 // Credential resolves one credential.
@@ -53,8 +51,7 @@ func (token UserWorkerTokenFunc) Credential(ctx context.Context) (string, error)
 	return token(ctx)
 }
 
-// userWorkerStaticToken is one fixed credential. Only this shape is validated at
-// construction, exactly as the TS string branch is.
+// userWorkerStaticToken holds a credential validated during construction.
 type userWorkerStaticToken string
 
 // Credential resolves the fixed credential.
@@ -73,15 +70,13 @@ type UserWorkerTimeouts struct {
 	Mutation time.Duration
 }
 
-// DefaultUserWorkerTimeouts equals the TS task request timeouts this worker uses.
+// DefaultUserWorkerTimeouts uses the shared read and mutation request budgets.
 var DefaultUserWorkerTimeouts = UserWorkerTimeouts{
 	Read:     protocol.DefaultTaskRequestTimeouts.Read,
 	Mutation: protocol.DefaultTaskRequestTimeouts.Mutation,
 }
 
-// userWorkerHTTPClient is shared by every worker. The TS client asks for
-// `redirect: 'error'`, so a redirect is never followed and the redirect response
-// itself reaches the status check.
+// userWorkerHTTPClient refuses redirects so their responses reach status checks.
 var userWorkerHTTPClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
@@ -159,9 +154,8 @@ func (worker *UserWorker) live() error {
 	return nil
 }
 
-// authorization resolves one bearer credential. A missing installation is a
-// request failure, never a gateway restart: the lookup is retried on the next
-// request, after the closure check, exactly as the TS method orders them.
+// authorization resolves one bearer credential. Missing installations fail the
+// request; subsequent requests may retry the lookup after checking closure.
 func (worker *UserWorker) authorization(ctx context.Context) (string, error) {
 	credential, err := worker.token.Credential(ctx)
 	if err != nil {
@@ -177,9 +171,8 @@ func (worker *UserWorker) authorization(ctx context.Context) (string, error) {
 	return "Bearer " + credential, nil
 }
 
-// call performs one authenticated user-helper request and returns its decoded
-// response as raw JSON, so the peripheral guards keep the runtime shape checks
-// the TS client applies to `unknown` values.
+// call performs one authenticated helper request and returns raw JSON so the
+// caller can validate the runtime response shape.
 func (worker *UserWorker) call(ctx context.Context, path string, input any) (json.RawMessage, error) {
 	if err := worker.live(); err != nil {
 		return nil, err

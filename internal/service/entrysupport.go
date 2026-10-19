@@ -19,10 +19,8 @@ import (
 	"github.com/newo-ether/filo/internal/sessions"
 )
 
-// The two remaining TypeScript entry points, `system-service.ts` and
-// `standalone.ts`, are Go functions in this package. They share the private
-// layout of one entry directory, the bind admission and the shutdown latch, and
-// the shared pieces live here so neither entry point owns a second copy.
+// The system-service and standalone Go entry points share the private directory
+// layout, bind validation and shutdown latch defined here.
 const (
 	// entryConfigName is the private configuration record of one entry directory.
 	entryConfigName = "config.json"
@@ -36,16 +34,13 @@ const (
 	entryHeaderTimeout = 5 * time.Second
 )
 
-// entryBindPattern admits exactly the loopback address and the RFC 6598 range the
-// TypeScript entry points accept, so a private gateway can never be published
-// beyond the host or its tailnet.
+// entryBindPattern limits gateway listeners to loopback or the RFC 6598 range
+// used by tailnet addresses. isEntryIPv4 validates each octet before admission.
 var entryBindPattern = regexp.MustCompile(`^(127\.0\.0\.1|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3})$`)
 
-// isEntryIPv4 reproduces the TypeScript check `isIP(value) === 4`, which both
-// entry points apply before the bind pattern. Go's net.ParseIP is deliberately
-// not used: it also accepts values Node rejects, such as `127.1` and
-// `100.064.1.1`, and an entry bind must never be admitted under a looser rule
-// than the one that guarded it before.
+// isEntryIPv4 requires four decimal octets without leading zeroes. Abbreviated
+// addresses such as `127.1` and padded octets such as `100.064.1.1` are refused
+// before applying the listener address allowlist.
 func isEntryIPv4(value string) bool {
 	parts := strings.Split(value, ".")
 	if len(parts) != 4 {
@@ -72,9 +67,7 @@ func isEntryIPv4(value string) bool {
 }
 
 // readEntryBinding admits the private bind/port pair of one entry configuration.
-// The port is a JSON number, so it is compared as a float: a fractional or
-// out-of-range value is refused exactly where the TypeScript `Number.isInteger`
-// range check refuses it.
+// The JSON port must be an integer between 1024 and 65535.
 func readEntryBinding(config map[string]any) (string, int, bool) {
 	bind, isText := config["bind"].(string)
 	if !isText || !isEntryIPv4(bind) || !entryBindPattern.MatchString(bind) {
@@ -87,10 +80,8 @@ func readEntryBinding(config map[string]any) (string, int, bool) {
 	return bind, int(port), true
 }
 
-// readEntryJSON reads one private JSON record. A document that is not an object
-// yields an empty record, so the caller reports the same admission refusal the
-// TypeScript entry point reports for a primitive document, where a primitive has
-// no configuration field either.
+// readEntryJSON reads one private JSON record. A non-object document yields an
+// empty record so the caller rejects its missing configuration fields.
 func readEntryJSON(path string) (map[string]any, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
@@ -106,9 +97,8 @@ func readEntryJSON(path string) (map[string]any, error) {
 	return map[string]any{}, nil
 }
 
-// readEntryText reads one private credential and trims it with the same
-// whitespace the TypeScript entry points trim, which is wider than Go's
-// strings.TrimSpace.
+// readEntryText reads one private credential and trims ECMAScript whitespace,
+// including the byte order mark that strings.TrimSpace leaves intact.
 func readEntryText(path string) (string, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
@@ -130,9 +120,7 @@ func writeEntryRecord(output io.Writer, record any) {
 	_, _ = output.Write(append(encoded, '\n'))
 }
 
-// writeEntryDiagnostic prints the one bounded line an entry point reports when it
-// cannot start. The TypeScript entry points let Node print an uncaught stack
-// instead; a service manager reads a single line.
+// writeEntryDiagnostic writes one startup failure line for the service manager.
 func writeEntryDiagnostic(output io.Writer, prefix, message string) {
 	if output == nil {
 		output = os.Stderr
@@ -148,11 +136,9 @@ func entrySignals() (<-chan os.Signal, func()) {
 	return signals, func() { signal.Stop(signals) }
 }
 
-// exitLatch serializes the first shutdown request of one entry point. The first
-// caller runs the shutdown inline and owns the exit code, which is what the
-// TypeScript `stopping` flag does. A reentrant call, including the one a native
-// close handler makes while shutdown is already closing that native connection,
-// returns immediately instead of waiting on the shutdown it interrupted.
+// exitLatch serializes shutdown requests. The first caller runs shutdown inline
+// and owns the exit code. Reentrant calls, including native close handlers invoked
+// during shutdown, return immediately to avoid waiting on themselves.
 type exitLatch struct {
 	mu      sync.Mutex
 	stopped bool
@@ -213,8 +199,8 @@ func (scope createdScope) Owns(_ context.Context, id string) (bool, error) {
 	return scope.tasks.Owns(id)
 }
 
-// Read returns one page of a created task. The empty cursor is passed as an
-// absent cursor, which is how the TypeScript client receives it.
+// Read returns one page of a created task. An empty cursor requests the initial
+// page by omitting the cursor from the client request.
 func (scope createdScope) Read(ctx context.Context, id, cursor string, activity bool) (protocol.ConversationPage, error) {
 	var after *string
 	if cursor != "" {

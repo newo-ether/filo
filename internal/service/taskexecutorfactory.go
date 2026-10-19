@@ -18,14 +18,11 @@ import (
 )
 
 const (
-	// DefaultExecutorFactoryCapacity is the TS default concurrent native writer
-	// bound: four live executors per leased user helper.
+	// DefaultExecutorFactoryCapacity bounds live executors per leased user helper.
 	DefaultExecutorFactoryCapacity = 4
-	// executorRunnerArgument selects the runner entry point inside this same
-	// binary, which replaces the TS `node task-executor-runner.js <directory>`
-	// spawn. A deployment therefore never needs a second artifact.
+	// executorRunnerArgument selects the runner entry in the same binary.
 	executorRunnerArgument = "executor-runner"
-	// executorReadinessPoll is the TS `delay(100)` between readiness reads.
+	// executorReadinessPoll controls the interval between readiness reads.
 	executorReadinessPoll = 100 * time.Millisecond
 	// executorFollowReadiness bounds a read-only follow, which must never wait
 	// the full cold-start budget for a writer that may already be gone.
@@ -44,11 +41,8 @@ type ExecutorLauncher func(directory string) error
 
 // TaskExecutorFactoryOptions configures one factory.
 //
-// Divergences from the TypeScript constructor, which took positional arguments
-// with defaults: Capacity == 0 selects DefaultExecutorFactoryCapacity and
-// Readiness <= 0 selects the protocol executor readiness budget (90s), because
-// a Go zero value cannot distinguish an omitted argument from zero. Negative
-// paths are refused in both ports.
+// Capacity == 0 selects DefaultExecutorFactoryCapacity. Readiness <= 0 selects
+// the protocol executor readiness budget. Deployment paths must be absolute.
 type TaskExecutorFactoryOptions struct {
 	// Directory is the absolute private executor root.
 	Directory string
@@ -81,8 +75,8 @@ type TaskExecutorFactory struct {
 	capacity  int
 	readiness time.Duration
 
-	// admission serializes allocation, the Go equivalent of the TS promise
-	// chain, so two concurrent creations can never both observe free capacity.
+	// admission serializes allocation so concurrent creations cannot both
+	// observe the same free capacity.
 	admission sync.Mutex
 
 	mu      sync.Mutex
@@ -494,7 +488,6 @@ func launchExecutorRunner(directory string) error {
 	if err := command.Start(); err != nil {
 		return err
 	}
-	// The child is never waited for, matching the TS detached spawn followed by
-	// unref.
+	// Release the detached child without waiting for its lifetime to end.
 	return command.Process.Release()
 }

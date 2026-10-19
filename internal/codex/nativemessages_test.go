@@ -187,7 +187,7 @@ func TestToolActivityMcpToolCall(t *testing.T) {
 		t.Fatalf("state = %v", activity.State)
 	}
 	// item.error wins over the result object via ?? and marks failure. A
-	// top-level string preview stays raw (TS append, no JSON quotes).
+	// top-level string preview stays raw, without JSON quotes.
 	activity, _ = toolActivity(map[string]any{
 		"type": "mcpToolCall", "error": "native failure", "result": map[string]any{"content": []any{}},
 	})
@@ -254,7 +254,7 @@ func TestToolActivityWebSearchImageViewGeneration(t *testing.T) {
 		t.Fatalf("imagePath = %+v", activity.ImagePath)
 	}
 	// imageView with an empty path: state stays undefined but imagePath ""
-	// is still an explicit own key on the TS wire shape.
+	// is still an explicit key in the projected wire shape.
 	activity, _ = toolActivity(map[string]any{"type": "imageView", "path": ""})
 	if activity.State != "" {
 		t.Fatalf("state = %q", activity.State)

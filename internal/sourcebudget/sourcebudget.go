@@ -1,9 +1,5 @@
-// Package sourcebudget holds the maintained-source size budget of this
-// repository. The gate was a Node script, `scripts/check-source-size.mjs`, that
-// every build ran before it compiled anything. A delivery may contain no Node
-// runtime, so the rule lives here instead and runs with the ordinary Go test
-// command, which is also what a build script can ask for without a second
-// toolchain.
+// Package sourcebudget enforces the maintained-source line budget through the
+// ordinary Go test command and Windows build scripts.
 //
 // The budget is measured in physical lines, and only maintained source counts:
 // generated output and unmodified dependencies are excluded by directory, and
@@ -129,8 +125,7 @@ func Check(root string) error {
 // CountLines counts the physical lines of one file body. A body ends with the
 // last character it holds, so a trailing terminator closes the line it belongs
 // to instead of opening an empty one, and an empty body holds no line at all.
-// Carriage return, line feed and a carriage-return line-feed pair each end one
-// line, which is the rule the TypeScript gate applied.
+// Carriage return, line feed and a carriage-return line-feed pair each end one line.
 func CountLines(body []byte) int {
 	if len(body) == 0 {
 		return 0

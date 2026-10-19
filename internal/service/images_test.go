@@ -85,7 +85,7 @@ func TestNativeImageLinksRefusesLinksSamplesAndRemoteOrigins(t *testing.T) {
 func TestLocalImagePathAcceptsOnlyLocalAbsolutePaths(t *testing.T) {
 	local := filepath.Join(t.TempDir(), "\u4e2d\u6587%20 image.png")
 	// A literal path keeps its percent characters; only URI and Markdown
-	// destinations are decoded, matching the TS split.
+	// destinations are decoded.
 	decoded := filepath.Join(filepath.Dir(local), "\u4e2d\u6587  image.png")
 	localhost := (&url.URL{Scheme: "file", Host: "localhost", Path: "/" + filepath.ToSlash(local)}).String()
 	cases := []struct {

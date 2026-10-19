@@ -35,7 +35,7 @@ type History interface {
 
 // CreatedReader exposes the separately verified creation or recovery scope.
 // Being present in ordinary history never grants this ownership. A successful
-// attachment returns its own release action, which is the TS detach.
+// attachment returns its own release action.
 type CreatedReader interface {
 	Owns(context.Context, string) (bool, error)
 	Read(context.Context, string, string, bool) (protocol.ConversationPage, error)

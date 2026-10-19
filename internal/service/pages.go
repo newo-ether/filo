@@ -32,14 +32,13 @@ const (
 // stays in Codex.
 const previewTruncationNote = "\n[Filo preview truncated; full output remains in Codex.]"
 
-// ConversationReader is the native read surface the conversation layer pages
-// through. It mirrors the TS Reader type; excludedTurns is only meaningful for
-// readers that do not exclude their own live turns.
+// ConversationReader exposes paged native reads. excludedTurns is meaningful
+// only for readers that do not already exclude their own live turns.
 type ConversationReader interface {
 	Read(ctx context.Context, id, cursor string, activity bool, excludedTurns []string) (protocol.ConversationPage, error)
 }
 
-// PageOptions mirrors the trailing arguments of the TS readConversationPage.
+// PageOptions configures conversation paging.
 // Layer names the history cursor namespace ('desktop' when empty).
 type PageOptions struct {
 	Activity        bool
@@ -48,8 +47,7 @@ type PageOptions struct {
 	IncludeMetadata bool
 }
 
-// historyCursor is the decoded filo.page cursor payload. Null and absent both
-// decode to nil, matching the TS nullish reads.
+// historyCursor decodes filo.page cursors; absent and null fields both yield nil.
 type historyCursor struct {
 	ID      string  `json:"id"`
 	Native  *string `json:"native"`
@@ -57,8 +55,7 @@ type historyCursor struct {
 	Through *string `json:"through"`
 }
 
-// pageCursorPayload is the encoded cursor body; insertion order matches the TS
-// object literal so cursors stay byte-comparable across the two services.
+// pageCursorPayload preserves serialized field order for byte-comparable cursors.
 type pageCursorPayload struct {
 	ID      string  `json:"id"`
 	Native  *string `json:"native,omitempty"`
@@ -216,8 +213,7 @@ func EncodeResponse(value any) (string, error) {
 	return text, nil
 }
 
-// nativePointer keeps an absent native cursor absent, so its cursor key stays
-// dropped exactly as TS drops an undefined value.
+// nativePointer omits empty cursor fields from native requests.
 func nativePointer(cursor string) *string {
 	if cursor == "" {
 		return nil
@@ -267,10 +263,8 @@ func decodeBase64URL(value string) ([]byte, bool) {
 	return decoded, true
 }
 
-// assignGroupIDs mirrors the TS fold: each turn keeps one group identity, a
-// user message resets it, and an explicit native groupId is preserved. The
-// unset cases are tracked separately from empty strings because `??` only
-// substitutes for null and undefined.
+// assignGroupIDs keeps one group identity per turn. User messages reset it and
+// explicit native groupIds are preserved. Unset and empty IDs remain distinct.
 func assignGroupIDs(messages []protocol.Message) []protocol.Message {
 	projected := make([]protocol.Message, 0, len(messages))
 	var turn, user, group string
@@ -360,8 +354,8 @@ func textRangeUnits(value string, start, end int) string {
 	return head[len(toolpreview.SliceUTF16(value, start)):]
 }
 
-// splitsSurrogatePair mirrors the TS guard: a cut between a high and a low
-// surrogate moves back one unit so the pair stays whole.
+// splitsSurrogatePair detects cuts between a high and low surrogate so the cut
+// can move back one unit and preserve the pair.
 func splitsSurrogatePair(value string, index int) bool {
 	last, hasLast := unitAt(value, index-1)
 	next, hasNext := unitAt(value, index)

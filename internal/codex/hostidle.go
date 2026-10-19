@@ -6,23 +6,20 @@ import (
 	"github.com/newo-ether/filo/internal/nativejson"
 )
 
-// hostReader mirrors TS Pick<CodexRpc, 'request'>. VerifyHostIdle reads the
-// selected auxiliary host only; it never acquires, stops or migrates a native
-// task.
+// hostReader exposes the request operation needed to verify a selected auxiliary
+// host. Verification never acquires, stops or migrates a native task.
 type hostReader interface {
 	Request(method string, params any) (any, error)
 }
 
 // VerifyHostIdle walks the loaded-thread pages of the auxiliary host and
 // requires every visible thread to report an idle status. It returns the
-// number of verified threads. Error texts and guard rails (array shape,
-// distinct string ids, 10000-id ceiling, advancing string cursors) match the
-// TS verifyHostIdle verbatim.
+// number of verified threads. Pages must contain arrays of distinct string IDs,
+// stay within 10000 IDs and provide advancing string cursors.
 func VerifyHostIdle(rpc hostReader) (int, error) {
 	seen := make(map[string]struct{})
 	cursors := make(map[string]struct{})
-	// nil models the TS undefined cursor; empty strings are normalised to nil
-	// by the same "page.nextCursor || undefined" expression as in TS.
+	// A nil cursor omits the field; an empty next cursor ends pagination.
 	var cursor *string
 	for {
 		params := map[string]any{"limit": 100}
@@ -33,10 +30,7 @@ func VerifyHostIdle(rpc hostReader) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		// TS reads page.data off any value; a missing page, missing "data" or
-		// JSON null all fail Array.isArray and yield the same "cannot verify"
-		// error. A decoded JSON array is never nil, so dataRaw == nil covers
-		// exactly the TS rejection set.
+		// Missing, null and non-array data cannot prove that the host is idle.
 		page, _ := nativejson.Fields(pageResult)
 		dataRaw, _ := page["data"].([]any)
 		if dataRaw == nil {
@@ -53,8 +47,7 @@ func VerifyHostIdle(rpc hostReader) (int, error) {
 			if err != nil {
 				return 0, err
 			}
-			// TS thread?.status?.type !== 'idle': a missing thread, status or
-			// wrong type all take the same "active" branch.
+			// Missing or malformed status cannot prove that the thread is idle.
 			readMap, _ := nativejson.Fields(readResult)
 			thread, _ := nativejson.Fields(readMap["thread"])
 			status, _ := nativejson.Fields(thread["status"])
@@ -65,14 +58,14 @@ func VerifyHostIdle(rpc hostReader) (int, error) {
 				}
 			}
 		}
-		// TS: page.nextCursor != null && (typeof != 'string' || cursors.has) -> throw
+		// Present cursors must be strings and must not repeat.
 		if nextRaw := page["nextCursor"]; nextRaw != nil {
 			next, isString := nativejson.AsText(nextRaw)
 			_, seenCursor := cursors[next]
 			if !isString || seenCursor {
 				return 0, errors.New("Auxiliary cursor did not advance")
 			}
-			// TS: cursor = page.nextCursor || undefined; if (cursor) cursors.add(cursor)
+			// Track nonempty cursors; an empty cursor ends the scan.
 			if next != "" {
 				cursors[next] = struct{}{}
 				nextCopy := next

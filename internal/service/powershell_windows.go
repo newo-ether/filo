@@ -14,16 +14,13 @@ import (
 	"time"
 )
 
-// windowsPowerShellOutputLimit replaces the TS execFile maxBuffer: one bounded
-// diagnostic buffer per stream.
+// windowsPowerShellOutputLimit bounds each diagnostic output stream.
 const windowsPowerShellOutputLimit = 65536
 
 // windowsPowerShell runs one absolute script with the Windows-provided shell and
 // its own module discovery, never an inherited PowerShell 7 path.
 //
-// Divergences from the TS promisified execFile: the output bound is enforced
-// after the child finished instead of aborting it mid-write, and a timeout kills
-// the shell unconditionally rather than sending it a termination signal.
+// Output overflow is reported after the child exits; timeout kills the shell.
 func windowsPowerShell(script string, args []string, timeout time.Duration) (string, error) {
 	systemRoot := os.Getenv("SystemRoot")
 	if systemRoot == "" || !filepath.IsAbs(script) {
@@ -55,8 +52,8 @@ func windowsPowerShell(script string, args []string, timeout time.Duration) (str
 	return stdout.String(), nil
 }
 
-// windowsPowerShellEnvironment mirrors the TS `PSModulePath` deletion: the
-// inherited PowerShell 7 module path must never reach the Windows shell.
+// windowsPowerShellEnvironment removes the inherited PowerShell 7 module path
+// so Windows PowerShell discovers its own system modules.
 func windowsPowerShellEnvironment() []string {
 	environment := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {

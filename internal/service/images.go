@@ -93,8 +93,7 @@ func LocalImagePath(link string) (string, bool) {
 		}
 		path = decoded
 	}
-	// Desktop Markdown can prefix a Windows drive with a URL-style slash, as in
-	// the TS guard /^\/[a-z]:[\\/]/i.
+	// Desktop Markdown can prefix a Windows drive with a URL-style slash.
 	if runtime.GOOS == "windows" && len(path) >= 4 && path[0] == '/' && isDriveLetter(path[1]) &&
 		path[2] == ':' && (path[3] == '/' || path[3] == '\\') {
 		path = path[1:]

@@ -53,9 +53,8 @@ func NewTaskActivity(id string) *TaskActivity {
 	return NewTaskActivityWith(id, taskActivityItems, taskActivityChars)
 }
 
-// NewTaskActivityWith builds one activity buffer with explicit bounds. Unlike the
-// TS default parameters, a bound is used exactly as given, so a test can pin an
-// overflow without a four megabyte payload.
+// NewTaskActivityWith uses explicit bounds, including zero, so callers can test
+// overflow without constructing a default-sized payload.
 func NewTaskActivityWith(id string, maxItems, maxChars int) *TaskActivity {
 	return &TaskActivity{
 		id:       id,
@@ -70,10 +69,8 @@ func NewTaskActivityWith(id string, maxItems, maxChars int) *TaskActivity {
 // this buffer, and an overflow stops it instead of publishing a truncated suffix
 // as a new full message.
 //
-// Divergence from the TS `receive(event: RpcNotification)`: the method and the
-// decoded params are passed separately, which is the Go form of one packet. A
-// turn id that is present but not text is refused outright instead of being kept
-// as a non-text identity, which is a malformed-payload difference only.
+// The method and decoded parameters arrive separately; non-text turn IDs are
+// refused before they can become retained identities.
 func (a *TaskActivity) Receive(method string, params any) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -363,9 +360,8 @@ func taskActivitySummary(value any) []string {
 	return summary
 }
 
-// taskActivityCharsOf counts the characters one message costs, the way the TS
-// `JSON.stringify(message).length` does. The encoder keeps HTML characters
-// unescaped so the count is the JavaScript one and the count is in UTF-16 units.
+// taskActivityCharsOf counts serialized message size in UTF-16 units, with HTML
+// characters unescaped to match JavaScript JSON.stringify length accounting.
 func taskActivityCharsOf(message protocol.Message) int {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
@@ -382,8 +378,7 @@ func taskActivityText(value any) string {
 	return text
 }
 
-// taskActivitySeconds reads a native start time, where any non-number counts as
-// the TS `?? 0` fallback.
+// taskActivitySeconds reads a numeric native start time; other values yield zero.
 func taskActivitySeconds(value any) float64 {
 	number, ok := value.(float64)
 	if !ok {

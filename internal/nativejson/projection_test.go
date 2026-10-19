@@ -73,8 +73,8 @@ func itemsOf(t *testing.T, state map[string]any) []any {
 	return arr(t, obj(t, turns[0])["items"])
 }
 
-// Mirrors desktop-json.test.ts: a 192 MiB native tool result is consumed with a
-// bounded retained projection while short public text and metadata survive.
+// A 192 MiB native tool result must retain a bounded projection while preserving
+// short public text and metadata.
 func TestHugeToolResultStaysBounded(t *testing.T) {
 	if testing.Short() {
 		t.Skip("memory-heavy baseline case")

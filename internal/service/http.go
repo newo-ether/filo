@@ -34,9 +34,8 @@ var (
 	uuidPattern  = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
 
-// SessionAPI is the bounded session surface the HTTP layer drives. It mirrors
-// the TS SessionOperations plus the follower attach lease, which returns its
-// own release action instead of a separate detached flag.
+// SessionAPI exposes bounded session operations and follower attachment leases.
+// Each successful attachment returns its own release action.
 type SessionAPI interface {
 	List(ctx context.Context, cursor string) (protocol.SessionPage, error)
 	Create(ctx context.Context, text, clientID string, settings protocol.SessionSettings) (protocol.Session, protocol.SendReceipt, error)
@@ -113,9 +112,8 @@ type Server struct {
 	imageReaders int
 }
 
-// NewServer validates the token and prepares the payload cache the paged views
-// share. The token must be 256 bits of hexadecimal, exactly as the TS server
-// requires.
+// NewServer requires a 256-bit hexadecimal token and prepares the shared
+// payload cache for paged views.
 func NewServer(options ServerOptions) (*Server, error) {
 	if !tokenPattern.MatchString(options.Token) {
 		return nil, errors.New("Filo requires a 256-bit hexadecimal token")
@@ -297,8 +295,7 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 	if err := s.route(w, request); err != nil {
 		if w.wrote {
-			// The status line is already on the wire, exactly the case the TS
-			// server answers by destroying the response.
+			// Headers are already sent; abort instead of appending an error response.
 			panic(http.ErrAbortHandler)
 		}
 		s.fail(w, err)
@@ -561,8 +558,7 @@ func (s *Server) image(w *tracking, request *http.Request, id string) error {
 }
 
 // inlineImageIndex reads the optional inline selector from the first request
-// object. An absent or null selector keeps the native imageView reference,
-// exactly as the TS `imageIndex == null` check does.
+// object. An absent or null selector keeps the native imageView reference.
 func inlineImageIndex(item any) (*int, error) {
 	object, ok := item.(map[string]any)
 	if !ok {
@@ -660,7 +656,7 @@ func (s *Server) releaseImageReader() {
 }
 
 // sessionRoute splits /v1/sessions/<id>[/action]. Any suffix outside the known
-// action set fails the route, matching the TS path regex.
+// action set fails the route.
 func sessionRoute(path string) (id, action string, ok bool) {
 	rest, found := strings.CutPrefix(path, "/v1/sessions/")
 	if !found || rest == "" {
@@ -677,8 +673,8 @@ func sessionRoute(path string) (id, action string, ok bool) {
 	return "", "", false
 }
 
-// queryValue mirrors the TS `searchParams.get(name) ?? 'null'`: an absent
-// parameter substitutes null while an empty parameter stays a parse failure.
+// queryValue parses a JSON query parameter. An absent parameter substitutes
+// null while an empty parameter remains a parse failure.
 func queryValue(query url.Values, name string) (any, error) {
 	values, ok := query[name]
 	if !ok || len(values) == 0 {

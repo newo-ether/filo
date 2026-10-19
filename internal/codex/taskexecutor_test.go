@@ -37,8 +37,7 @@ type executorFixtureOptions struct {
 	recordTask          func(string) error
 }
 
-// executorFixture drives a TaskExecutor over a pipe pair that stands in for the
-// native host, exactly as the TypeScript fixture answered through its emitter.
+// executorFixture drives a TaskExecutor over a pipe pair acting as the native host.
 type executorFixture struct {
 	t       *testing.T
 	options executorFixtureOptions
@@ -75,8 +74,7 @@ func newExecutorFixture(t *testing.T, options executorFixtureOptions) *executorF
 			f.mu.Lock()
 			f.released++
 			f.mu.Unlock()
-			// The TypeScript fixture emitted 'closed', which ran the executor's
-			// own disconnect path.
+			// Exercise the executor's own disconnect path.
 			executor.Disconnect()
 			return nil
 		},

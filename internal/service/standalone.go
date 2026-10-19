@@ -18,9 +18,9 @@ import (
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
-// The standalone gateway is the preview service the operator starts by hand. It
-// owns no original desktop: it talks to one native app-server URL and keeps a
-// private lease so two gateways never share a directory.
+// The standalone gateway is a private user helper that connects to one native
+// app-server URL. It owns no original desktop and keeps a private lease so two
+// gateways never share a directory.
 const (
 	// standaloneBindRefusal rejects a configuration without an explicit
 	// loopback bind and a valid port.
@@ -38,16 +38,15 @@ const (
 	// standaloneApprovalRefusal answers every native UI request. Standalone
 	// sessions have no desktop approval owner, so an unsupported request must
 	// never hang.
-	standaloneApprovalRefusal = "Remote approval/input is unavailable in this preview"
-	// standaloneDiagnosticPrefix leads the one startup failure line, which the
-	// TypeScript entry point also prints before it stops.
+	standaloneApprovalRefusal = "Remote approval/input is unavailable for standalone sessions"
+	// standaloneDiagnosticPrefix leads the startup failure line.
 	standaloneDiagnosticPrefix = "Filo standalone failed: "
 	// standaloneLeaseName is the lease of one standalone directory.
 	standaloneLeaseName = "gateway.pid"
 	// standaloneCancellationName is the private shutdown request a launcher
 	// writes when it wants this gateway to stop.
 	standaloneCancellationName = "gateway.stop"
-	// standalonePollInterval is the TS `setInterval(..., 250)` of the
+	// standalonePollInterval controls how often the helper checks for a
 	// cancellation request.
 	standalonePollInterval = 250 * time.Millisecond
 	// standaloneIdentitySuffix marks the device of a standalone worker, which
@@ -214,8 +213,7 @@ type standaloneGateway struct {
 	lease    string
 	polling  chan struct{}
 	polled   bool
-	// checking is the TS `checkingCancellation` guard: one tick never overlaps
-	// the request read of the previous tick.
+	// checking prevents overlapping cancellation request reads.
 	checking atomic.Bool
 }
 
@@ -260,9 +258,8 @@ func (gateway *standaloneGateway) sessionSurface() *TaskSessions {
 	return gateway.sessions
 }
 
-// shutdown stops the poller and releases every resource in the TypeScript `stop`
-// order. It runs inline on the goroutine of the caller that claimed it and is
-// safe to reach again from the native close handler it triggered itself.
+// shutdown stops the poller, closes the server, sessions and native connection,
+// then releases the lease. It runs inline and permits reentrant close handlers.
 func (gateway *standaloneGateway) shutdown() {
 	gateway.mu.Lock()
 	if !gateway.polled {
@@ -321,10 +318,9 @@ func standaloneCancelled(directory string, gateway *standaloneGateway) bool {
 	return surface.PrepareShutdown(context.Background()) == nil
 }
 
-// standaloneDirectory resolves the private directory of one gateway. A relative
-// argument resolves against the working directory, exactly as the TypeScript
-// `resolve` does, and an absent one selects the default under the current user
-// profile.
+// standaloneDirectory resolves the private gateway directory. Relative arguments
+// resolve against the working directory; no argument selects the default under
+// the current user profile.
 func standaloneDirectory(arguments []string) (string, error) {
 	if len(arguments) > 0 {
 		return filepath.Abs(arguments[0])
@@ -358,10 +354,8 @@ func claimStandaloneLease(path string) error {
 	return writeExclusive(path, []byte(strconv.Itoa(os.Getpid())))
 }
 
-// entryLeaseNumber reads the recorded owner of one standalone lease. The gateway
-// writes exactly one decimal process identifier, so only that shape is admitted:
-// the TypeScript `Number()` also read other spellings, and a lease nobody of ours
-// wrote must never authorize a start.
+// entryLeaseNumber reads the recorded owner of one standalone lease. Only the
+// decimal process identifier format written by this gateway is admitted.
 func entryLeaseNumber(text string) (int64, bool) {
 	trimmed := codex.TrimJSWhitespace(text)
 	if trimmed == "" {
@@ -380,8 +374,7 @@ func entryLeaseNumber(text string) (int64, bool) {
 }
 
 // codexHome resolves the native home of the standalone sessions. An explicit
-// CODEX_HOME wins even when it is empty and is then resolved against the working
-// directory, which is what the TypeScript `??` operator does.
+// CODEX_HOME wins even when empty and resolves against the working directory.
 func codexHome(context.Context) (string, error) {
 	if home, isSet := os.LookupEnv("CODEX_HOME"); isSet {
 		return filepath.Abs(home)

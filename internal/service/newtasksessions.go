@@ -13,13 +13,10 @@ import (
 )
 
 const (
-	// taskSessionsListedBound is the TS `ids.length > 30` refusal. A status query
-	// is a bounded fan-out, never an unbounded sweep.
+	// taskSessionsListedBound limits each status query to a bounded fan-out.
 	taskSessionsListedBound = 30
-	// taskSessionsShuttingDown is the refusal every operation reports once the
-	// helper drains. The TypeScript adapter raised it with an RPC error code on
-	// the admission checks and as a plain error after a connection was already
-	// handed over; this port keeps both shapes.
+	// taskSessionsShuttingDown refuses operations while the helper drains.
+	// Admission checks use an RPC error; post-acquisition failures use a plain error.
 	taskSessionsShuttingDown = "Filo user helper is shutting down"
 )
 
@@ -67,13 +64,9 @@ type TaskSessionsFactory interface {
 // executor, and every request stays on the same authenticated host that already
 // owns the admitted task.
 //
-// Divergences from the TypeScript class NewTaskSessions, which keeps the name in
-// the port so the two files stay greppable: the class extended EventEmitter for
-// its single `changed` event, which Go exposes as SetChangedHandler; notification
-// and close callbacks arrive through the one handler slot each connection has, so
-// this adapter dispatches them itself; every map is guarded by a mutex, because a
-// served HTTP surface reaches this adapter from concurrent handlers; and every
-// operation takes the caller's context, which the TypeScript adapter did not have.
+// SetChangedHandler reports task changes. The adapter dispatches each connection's
+// notifications to its consumers and protects shared maps from concurrent HTTP
+// handlers. Operations use the caller's context where supported by native ports.
 type TaskSessions struct {
 	metadata TaskSessionsMetadata
 	history  TaskSessionsHistory
@@ -103,10 +96,8 @@ type taskSessionsOpening struct {
 	err   error
 }
 
-// ExecutorConnections adapts one executor factory to the connection-level
-// interface this adapter drives. The TypeScript constructor took the factory
-// directly, and Go cannot widen a concrete return type, so the production wiring
-// passes the factory through this adapter.
+// ExecutorConnections adapts the concrete executor factory's return values to
+// the connection-level interface used by TaskSessions.
 func ExecutorConnections(factory *TaskExecutorFactory) TaskSessionsFactory {
 	return executorConnections{factory: factory}
 }
@@ -152,10 +143,8 @@ func NewTaskSessions(metadata TaskSessionsMetadata, nativeHistory TaskSessionsHi
 	return NewTaskSessionsWith(metadata, nativeHistory, ExecutorConnections(factory))
 }
 
-// NewTaskSessionsWith builds the scoped adapter over explicit ports, which lets a
-// test drive it without a native executor. The TypeScript constructor took the
-// factory directly; Go needs the connection-level interface so an executor
-// connection can be replaced without a native process.
+// NewTaskSessionsWith accepts explicit ports so tests can replace native executors
+// with scripted connections.
 func NewTaskSessionsWith(metadata TaskSessionsMetadata, nativeHistory TaskSessionsHistory,
 	factory TaskSessionsFactory) *TaskSessions {
 	return &TaskSessions{
@@ -192,8 +181,7 @@ func (s *TaskSessions) List(ctx context.Context, cursor string) (protocol.Sessio
 	return s.history.List(ctx, cursor)
 }
 
-// Models reads the native model catalog. The peripheral native catalog call has
-// no context of its own, which is the TypeScript metadata port the adapter uses.
+// Models reads the native catalog through a port with no context parameter.
 func (s *TaskSessions) Models(context.Context) ([]protocol.Model, error) {
 	return s.metadata.Models()
 }
@@ -214,8 +202,7 @@ func (s *TaskSessions) Create(ctx context.Context, text, clientID string,
 			return err
 		}
 		if connection == nil {
-			// Divergence from the TypeScript non-null assumption: a creation
-			// without a connection has nothing to admit.
+			// Creation cannot proceed without an admitted connection.
 			err := errors.New("Filo native executor is unavailable")
 			recordCreateStage(ctx, createStageHelperAllocationFailed, err)
 			return err
@@ -291,10 +278,9 @@ func (s *TaskSessions) Create(ctx context.Context, text, clientID string,
 	return created, receipt, nil
 }
 
-// Attach admits one task for a streaming subscriber. The TypeScript attach is a
-// read. The followed connection stays in the entry table until the helper closes,
-// so the lease has nothing to release and an empty release action keeps a
-// disconnected client from ending a connection another subscriber still uses.
+// Attach reads one task for a streaming subscriber. Connections remain in the
+// entry table until the helper closes; a disconnected subscriber must not end a
+// connection another subscriber still uses, so the release action is empty.
 func (s *TaskSessions) Attach(ctx context.Context, id string) (func(), error) {
 	if _, err := s.Read(ctx, id, "", false, nil); err != nil {
 		return nil, err
@@ -365,9 +351,7 @@ func (s *TaskSessions) Send(ctx context.Context, id, text, clientID string) (pro
 		}
 		runtime := snapshot.Page.Runtime
 		if runtime == nil {
-			// Divergence from the TypeScript non-null assertion, which would have
-			// thrown a TypeError here: a snapshot without a runtime cannot prove
-			// that the native task is ready.
+			// A missing runtime cannot prove that the native task is ready.
 			return notReady()
 		}
 		input := []any{map[string]any{"type": "text", "text": protocol.Text(text), "text_elements": []any{}}}
@@ -571,8 +555,7 @@ func (s *TaskSessions) register(id string, connection TaskSessionsConnection,
 	sessions *codex.NativeTaskSession) *taskSessionsEntry {
 	activity := codex.NewTaskActivity(id)
 	entry := &taskSessionsEntry{connection: connection, sessions: sessions, activity: activity}
-	// This adapter owns the single notification slot of the connection and feeds
-	// both consumers from it, in the order the TypeScript listeners were attached.
+	// Dispatch the single notification slot to sessions, then activity.
 	connection.Transport().SetHandlers(nil, func(packet map[string]any) {
 		method, _ := packet["method"].(string)
 		sessions.Receive(method, packet["params"])
@@ -708,8 +691,7 @@ func shuttingDown() *codex.RpcError {
 	return &codex.RpcError{Message: taskSessionsShuttingDown, Code: f64(-32600)}
 }
 
-// drainingError is the plain refusal an acquisition raises after the factory
-// already handed it a connection, which is how the TypeScript adapter raised it.
+// drainingError refuses an acquisition after the factory handed it a connection.
 func drainingError() error { return errors.New(taskSessionsShuttingDown) }
 
 // notReady is the refusal of a message the native runtime cannot accept.

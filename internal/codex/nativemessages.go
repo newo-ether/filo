@@ -11,17 +11,15 @@ import (
 	"github.com/newo-ether/filo/internal/toolpreview"
 )
 
-// Native data flows as decoded JSON maps so surrogate-bearing text keeps the
-// WTF-8 preservation guarantees of the nativejson decoder; TS reads these
-// same fields via duck typing.
+// Native data uses decoded JSON maps so surrogate-bearing text retains the
+// nativejson decoder's WTF-8 preservation guarantees.
 
 func asMap(v any) (map[string]any, bool) {
 	m, ok := nativejson.Fields(v)
 	return m, ok
 }
 
-// copyDefined mirrors how TS object literals drop keys whose value is
-// undefined (absent in the source map) while keeping explicit nulls.
+// copyDefined copies present keys, including explicit nulls, and omits absent keys.
 func copyDefined(dst *nativejson.Object, dstKey string, src map[string]any, srcKey string) {
 	if src == nil {
 		return
@@ -31,13 +29,11 @@ func copyDefined(dst *nativejson.Object, dstKey string, src map[string]any, srcK
 	}
 }
 
-// inputText mirrors TS inputText: only non-string parts with type "text"
-// contribute; raw strings inside the content array are dropped.
+// inputText joins object parts with type "text"; raw strings are dropped.
 func inputText(content any) string {
 	parts, ok := content.([]any)
 	if !ok {
-		// TS flatMap on a non-array raises a TypeError; native data always
-		// sends arrays, and the empty join is the closest total mapping.
+		// Malformed non-array content projects as empty text.
 		parts = []any{}
 	}
 	texts := make([]string, 0, len(parts))
@@ -60,8 +56,7 @@ func encoded(value any) protocol.Optional[protocol.Text] {
 	return protocol.Known(protocol.Text(text))
 }
 
-// durationMilliseconds mirrors the TS guard: finite, 0 <= v <= 2^53-1, then
-// Math.trunc.
+// durationMilliseconds truncates finite values in the range 0 through 2^53-1.
 func durationMilliseconds(value any) (float64, bool) {
 	number, ok := value.(float64)
 	if !ok || math.IsNaN(number) || math.IsInf(number, 0) {
@@ -73,8 +68,8 @@ func durationMilliseconds(value any) (float64, bool) {
 	return math.Trunc(number), true
 }
 
-// textContent mirrors the TS helper: array parts of type text/inputText with
-// string text are joined with blank lines; empty results are undefined.
+// textContent joins text/inputText object parts with blank lines and reports
+// empty results as absent.
 func textContent(value any) (string, bool) {
 	parts, ok := value.([]any)
 	if !ok {
@@ -82,7 +77,7 @@ func textContent(value any) (string, bool) {
 	}
 	texts := make([]string, 0, len(parts))
 	for _, part := range parts {
-		// TS part?.type: non-object parts yield undefined property reads.
+		// Non-object parts have no type field and contribute nothing.
 		if partMap, isMap := asMap(part); isMap {
 			typeName, _ := nativejson.AsText(partMap["type"])
 			if typeName == "text" || typeName == "inputText" {
@@ -98,9 +93,8 @@ func textContent(value any) (string, bool) {
 	return strings.Join(texts, "\n\n"), true
 }
 
-// toolActivity normalizes public tool records and native image references,
-// never binary data or raw reasoning. It mirrors the TS switch exactly,
-// including which fields gate failure and result presence.
+// toolActivity projects public tool records and native image references without
+// binary data or raw reasoning. Native fields determine failure and result presence.
 func toolActivity(item map[string]any) (*protocol.Activity, bool) {
 	typeName, _ := nativejson.AsText(item["type"])
 	var toolName string
@@ -138,7 +132,7 @@ func toolActivity(item map[string]any) (*protocol.Activity, bool) {
 	case "mcpToolCall":
 		toolName = jsCoalesce(item["server"], "mcp") + "/" + jsCoalesce(item["tool"], "tool")
 		args = item["arguments"]
-		// TS: output = item.result as {content?, structuredContent?, isError?}|null.
+		// Only an object result can provide structured output and error fields.
 		output := item["result"]
 		if outputMap, isMap := asMap(output); isMap {
 			if isError, isBool := outputMap["isError"].(bool); isBool && isError {
@@ -354,9 +348,8 @@ func jsNumberString(v float64) string {
 
 var turnErrorControl = regexp.MustCompile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
-// turnErrorMessage mirrors the TS turnError text pipeline: typeof check on
-// error?.message, control character strip (keeping \t \n \r), trim, then a
-// 8192 UTF-16 unit cap in that order.
+// turnErrorMessage reads a text error message, strips control characters except
+// tabs and line breaks, trims whitespace, then caps it at 8192 UTF-16 units.
 func turnErrorMessage(turnErr any) (string, bool) {
 	raw, isMap := asMap(turnErr)
 	if !isMap {
@@ -380,9 +373,8 @@ type NativeTurn struct {
 	Error     any
 }
 
-// ProjectMessages mirrors TS projectMessages: newest turn first, per-item
-// projection with an optional activity channel, and a terminal error message
-// appended for failed turns.
+// ProjectMessages projects newest turns first, optionally includes activity and
+// appends a terminal error message for failed turns.
 func ProjectMessages(turns []NativeTurn, includeActivity bool) []protocol.Message {
 	messages := make([]protocol.Message, 0, len(turns))
 	// [...turns].reverse(): iterate a reversed copy, originals untouched.
@@ -449,8 +441,7 @@ func ProjectMessages(turns []NativeTurn, includeActivity bool) []protocol.Messag
 	return messages
 }
 
-// identityString passes native ids through; native ids are JSON strings and
-// non-string shapes have no TS-visible projection anyway.
+// identityString passes through native JSON string IDs and omits other shapes.
 func identityString(v any) string {
 	if s, ok := nativejson.AsText(v); ok {
 		return s

@@ -1,6 +1,5 @@
-// Package toolpreview bounds tool result serialization like the desktop
-// preview budget. Limits count UTF-16 units, matching the TypeScript original,
-// so structured output cannot retain more than the preview by using multibyte text.
+// Package toolpreview bounds serialized tool results in UTF-16 units, matching
+// the desktop preview budget even when text uses multibyte UTF-8 encoding.
 package toolpreview
 
 import (
@@ -199,9 +198,8 @@ func wtf8Unit(unit uint16) string {
 	})
 }
 
-// SliceUTF16 returns the leading units UTF-16 code units of s, matching
-// String.prototype.slice semantics used by TS callers outside this package
-// (for example the 8192-unit cap on turn error text).
+// SliceUTF16 returns the leading UTF-16 code units using String.prototype.slice
+// semantics, including for callers that cap turn error text.
 func SliceUTF16(s string, units int) string { return sliceUTF16(s, units) }
 
 // UTF16Len counts native UTF-16 code units, including preserved lone surrogates.

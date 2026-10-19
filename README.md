@@ -139,6 +139,12 @@ Go tests, Windows lifecycle checks and relevant native behavior comparisons befo
 deployment. Real installation, rollback, failure isolation and mobile acceptance
 are distinct checks; a build or unit-test pass does not certify all of them.
 
+[CI](.github/workflows/ci.yml) runs on Windows for pull requests into `main`,
+pushes to `main`, and `v*` tags. It uses the Go version in `go.mod`, verifies
+modules, runs `go vet ./...` and uncached `go test ./...` (including the source
+budget), then runs all default PowerShell fixtures. Interactive Desktop and real
+service-installation checks remain separate; CI does not publish or deploy.
+
 Never commit credentials, private logs, raw task transcripts, installed state or
 machine-specific diagnostics. The public repository begins at the reviewed Go
 baseline; private development evidence and earlier local history are not published.

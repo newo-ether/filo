@@ -9,9 +9,8 @@ import (
 	"github.com/newo-ether/filo/internal/toolpreview"
 )
 
-// MessageNode keeps transport sizing and cached image/payload identity on the
-// same projection as the TS messageNode. Pass nil serialized to hash the
-// message as this service would serialize it on the wire.
+// MessageNode derives transport sizing and cached image/payload identity from
+// the message projection. Nil serialized hashes the service's wire encoding.
 func MessageNode(message protocol.Message, serialized []byte) protocol.MessageNode {
 	if serialized == nil {
 		serialized = Marshal(message)
@@ -23,14 +22,13 @@ func MessageNode(message protocol.Message, serialized []byte) protocol.MessageNo
 		TextLength:      toolpreview.UTF16Len(string(message.Text)),
 		HasContent:      hasContent(message),
 	}
-	// TS: imageCount: message.imageLinks?.length, so an absent list stays
-	// absent while an empty decoded list still reports zero.
+	// An absent image list stays absent; an empty list reports zero.
 	if message.ImageLinks != nil {
 		node.ImageCount = protocol.Known(len(message.ImageLinks))
 	}
 	if message.Activity != nil {
-		// TS always emits hasImage for a present activity; only a genuine
-		// imageView reference counts, and the path itself never leaves.
+		// Present activities always report hasImage. Only native imageView
+		// references count; the private path never leaves this projection.
 		activity := &protocol.ActivityNode{
 			Type:       message.Activity.Type,
 			State:      message.Activity.State,
@@ -42,8 +40,8 @@ func MessageNode(message protocol.Message, serialized []byte) protocol.MessageNo
 	return node
 }
 
-// hasContent mirrors the TS truthiness chain: a user turn, a tool activity, any
-// non-JavaScript-whitespace body text or an explicit continuation marker.
+// hasContent recognizes user turns, tool activity, text beyond JavaScript
+// whitespace and explicit continuation markers.
 func hasContent(message protocol.Message) bool {
 	if message.Role == "user" {
 		return true

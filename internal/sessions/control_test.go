@@ -21,9 +21,8 @@ type controlRequest struct {
 	target  string
 }
 
-// controlIPC answers discovery and every follower control exactly like the TS
-// desktop fixture: a start reports a new turn, a steer reports the steered turn,
-// and an interrupt echoes the expected turn it was given.
+// controlIPC scripts discovery and follower control. Start returns a new turn,
+// steer returns the steered turn and interrupt echoes the expected turn.
 type controlIPC struct {
 	*ipcFixture
 

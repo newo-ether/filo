@@ -24,9 +24,8 @@ const (
 	taskClientMessages = 128
 )
 
-// TaskCall performs one private service call and returns its decoded response as
-// raw JSON, so this transport keeps the runtime shape guards the TS client
-// applies to `unknown` values.
+// TaskCall performs one private service call and returns raw JSON so the caller
+// can validate the runtime response shape.
 type TaskCall func(ctx context.Context, path string, input any) (json.RawMessage, error)
 
 // TaskStreamOpen opens one task event stream. The returned response is owned by
@@ -117,8 +116,7 @@ func (c *CreatedTaskClient) Read(ctx context.Context, id string, cursor *string,
 	if err := c.admit(id); err != nil {
 		return nil, err
 	}
-	// The TS client tests the cursor for truthiness, so an empty cursor is an
-	// absent cursor: it serves the cache and sends no cursor at all.
+	// An empty cursor serves the cached initial page and is omitted from requests.
 	if cursor != nil && *cursor == "" {
 		cursor = nil
 	}
@@ -145,8 +143,7 @@ func (c *CreatedTaskClient) Read(ctx context.Context, id string, cursor *string,
 	if cached != nil {
 		return cached, nil
 	}
-	// The query keeps the TS key order: the activity flag first, then the cursor
-	// only when the reader provided one.
+	// Preserve query order: activity first, then a supplied cursor.
 	query := "includeActivity=" + strconv.FormatBool(activity)
 	if cursor != nil {
 		query += "&cursor=" + url.QueryEscape(*cursor)
@@ -410,7 +407,7 @@ func (c *CreatedTaskClient) notify(id string) {
 }
 
 // awaitTaskReady waits for one subscription's readiness, bounded by the caller's
-// context. The TS client awaits the same promise without a caller cancellation.
+// context.
 func awaitTaskReady(ctx context.Context, subscription *taskSubscription) error {
 	if ctx == nil {
 		ctx = context.Background()
@@ -432,9 +429,8 @@ func decodeTaskPage(raw json.RawMessage) (*protocol.ConversationPage, error) {
 	return taskPage(value)
 }
 
-// taskPage validates one decoded page exactly as the TS guard does: both
-// collections must be present and bounded, and the cursor must be present as
-// either text or an explicit null.
+// taskPage requires both bounded collections and a cursor that is either text
+// or an explicit null.
 func taskPage(value any) (*protocol.ConversationPage, error) {
 	invalid := errors.New("Filo returned an invalid task page")
 	object, ok := value.(map[string]any)

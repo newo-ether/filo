@@ -82,7 +82,7 @@ func (state *userWorkerTestTokens) started() chan struct{} {
 }
 
 // userWorkerTestHistory is the read-only native history behind one fixture. It
-// records every argument so a passthrough can be compared with the TS call log.
+// records every argument to verify passthrough behavior.
 type userWorkerTestHistory struct {
 	mu      sync.Mutex
 	calls   [][]any
@@ -237,9 +237,8 @@ func newUserWorkerFixture(t *testing.T, target string, token UserWorkerToken,
 	return worker
 }
 
-// assertUserWorkerTimeout requires the deadline to have ended the call. The Go
-// client reports a request deadline as context.DeadlineExceeded, where the TS
-// test matched the "timeout" text.
+// assertUserWorkerTimeout requires context.DeadlineExceeded after the call's
+// request deadline expires.
 func assertUserWorkerTimeout(t *testing.T, err error) {
 	t.Helper()
 	if err == nil {

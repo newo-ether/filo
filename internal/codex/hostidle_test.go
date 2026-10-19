@@ -56,8 +56,7 @@ func TestVerifyHostIdleSinglePagePassesAndCounts(t *testing.T) {
 	if len(host.calls) != 3 || host.calls[1].params["threadId"] != "a" || host.calls[2].params["threadId"] != "b" {
 		t.Fatalf("calls = %+v", host.calls)
 	}
-	// TS sends { cursor: undefined, limit: 100 } on the first page, which
-	// JSON.stringify reduces to { limit: 100 }.
+	// The initial page request omits the cursor field.
 	if _, exists := host.calls[0].params["cursor"]; exists {
 		t.Fatalf("first page leaked a cursor key: %+v", host.calls[0].params)
 	}
@@ -93,8 +92,7 @@ func TestVerifyHostIdleFollowsCursorAndSendsIt(t *testing.T) {
 }
 
 func TestVerifyHostIdleEmptyStringCursorEndsScan(t *testing.T) {
-	// TS: cursor = page.nextCursor || undefined turns "" into undefined, so
-	// the scan ends without sending an empty cursor request.
+	// An empty next cursor ends the scan without an empty-cursor request.
 	host := stubWith(t, func(c hostCall) (any, error) {
 		if c.method == "thread/loaded/list" {
 			return map[string]any{"data": []any{"a"}, "nextCursor": ""}, nil
@@ -111,8 +109,7 @@ func TestVerifyHostIdleEmptyStringCursorEndsScan(t *testing.T) {
 }
 
 func TestVerifyHostIdleRejectsRepeatingCursor(t *testing.T) {
-	// The id-duplicate guard fires before the cursor guard (same order as
-	// TS), so the repeating page must carry fresh ids to reach the check.
+	// Duplicate IDs are checked first, so fresh IDs reach the cursor guard.
 	pages := 0
 	host := stubWith(t, func(c hostCall) (any, error) {
 		if c.method == "thread/loaded/list" {
@@ -208,7 +205,7 @@ func TestVerifyHostIdleActiveThreadYieldsRpcErrorMinus32600(t *testing.T) {
 		map[string]any{"status": map[string]any{"type": "idle-ish"}},
 		map[string]any{},
 		map[string]any{"status": "weird"},
-		// TS thread?.status?.type on a missing thread still takes the active branch.
+		// A missing thread cannot prove an idle status.
 		nil,
 	} {
 		host := stubWith(t, func(c hostCall) (any, error) {

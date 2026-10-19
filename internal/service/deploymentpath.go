@@ -11,13 +11,9 @@ const deploymentRootEnvironment = "FILO_DEPLOYMENT_ROOT"
 
 // deploymentPath resolves one artifact of the installed layout.
 //
-// The TypeScript source walks up from its own file (`new URL('../../../../tools/
-// ..., import.meta.url)`), which a compiled Go binary cannot do. The equivalent
-// anchor is the directory of the running executable, so a deployment that ships
-// `tools/FiloBackground.exe` and `scripts/resolve-desktop-runtime.ps1` next to
-// the service binary resolves both without configuration. An absolute
-// FILO_DEPLOYMENT_ROOT overrides that anchor, which also gives tests a private
-// layout instead of the Go build cache the test binary lives in.
+// Installed artifacts resolve from the running executable's deployment root.
+// FILO_DEPLOYMENT_ROOT overrides that anchor with an absolute path, allowing
+// tests to use a private layout instead of the test binary's build-cache path.
 func deploymentPath(segments ...string) (string, error) {
 	root, err := deploymentRoot()
 	if err != nil {

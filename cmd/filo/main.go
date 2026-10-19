@@ -1,6 +1,5 @@
-// Command filo is the single Filo entry point: the same binary runs the desktop
-// IPC gateway, the standalone preview gateway and the private task executor
-// runner, so a deployment installs one artifact and needs no Node.js runtime.
+// Command filo runs the Desktop IPC gateway, standalone gateway and private
+// task executor from one executable.
 package main
 
 import (

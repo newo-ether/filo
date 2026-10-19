@@ -5,16 +5,15 @@ import (
 	"os"
 )
 
-// The installed Filo binary carries every entry point of one deployment, so no
-// entry point needs a second artifact or a Node.js runtime. The names match the
-// TypeScript entry scripts they replace.
+// The installed Filo binary carries every entry point of one deployment, so each
+// entry point uses the same artifact and runs without a Node.js runtime.
 const (
 	// systemServiceArgument runs the desktop IPC gateway of one service account.
 	systemServiceArgument = "system-service"
-	// standaloneArgument runs the standalone preview gateway.
+	// standaloneArgument runs the private standalone user helper.
 	standaloneArgument = "standalone"
 	// probeHostIdleArgument reports whether one auxiliary native host owns an
-	// active task. It replaces the installer-only `node probe-host-idle.mjs`.
+	// active task before the installer changes its Filo registration.
 	probeHostIdleArgument = "probe-host-idle"
 	// commandUsage is the one line printed for a call that names no entry point.
 	commandUsage = "Usage: filo <executor-runner|system-service|standalone|probe-host-idle|request> [arguments]"

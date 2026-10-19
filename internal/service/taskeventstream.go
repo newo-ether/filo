@@ -12,8 +12,7 @@ import (
 const (
 	// taskEventStreamType is the only content type a task event stream may carry.
 	taskEventStreamType = "text/event-stream"
-	// taskEventLimit bounds one pending line plus one accumulated data payload.
-	// Mirrors the TS `1024 * 1024` byte ceiling.
+	// taskEventLimit bounds one pending line plus one data payload to 1 MiB each.
 	taskEventLimit = 1024 * 1024
 	// taskEventMarker is the SSE event name that reports a failed task stream.
 	taskEventMarker = "error"
@@ -24,10 +23,8 @@ const (
 // stream history, and it fails instead of returning on a disconnected stream, so
 // a caller can never mistake a truncated subscription for an ended one.
 //
-// Divergence from the TS `readTaskEvents(response, receive)`: receive returns an
-// error, which is the Go form of the TS guard throwing inside the receive
-// callback. The decoder is fatal like the TS `TextDecoder('utf-8', {fatal:true})`,
-// so an invalid sequence fails the stream instead of being replaced.
+// Callback errors stop decoding. Invalid UTF-8 fails the stream instead of being
+// replaced with substitute characters.
 func ReadTaskEvents(response *http.Response, receive func(value any) error) error {
 	if response == nil || response.Body == nil || response.StatusCode < 200 ||
 		response.StatusCode >= 300 ||
@@ -73,8 +70,7 @@ func ReadTaskEvents(response *http.Response, receive func(value any) error) erro
 					}
 					data, event = "", ""
 				case strings.HasPrefix(line, "data:"):
-					// Only a single space after the field separator is framing,
-					// exactly like the TS `replace(/^ /, '')`.
+					// Only one space after the field separator is SSE framing.
 					value := strings.TrimPrefix(line[len("data:"):], " ")
 					if data != "" {
 						data += "\n"

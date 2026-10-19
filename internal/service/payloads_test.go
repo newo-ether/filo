@@ -13,8 +13,8 @@ import (
 
 const payloadSession = "11111111-1111-4111-8111-111111111111"
 
-// payloadFixture mirrors the TS fixture: one shared page whose bodies stay
-// mutable, so a test can prove the pager never rewrites native records.
+// payloadFixture shares mutable page bodies so tests can prove that paging never
+// rewrites native records.
 func payloadFixture(count int) (*fakeReader, []protocol.Message) {
 	messages := make([]protocol.Message, 0, count)
 	for index := 0; index < count; index++ {

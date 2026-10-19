@@ -17,7 +17,7 @@ import (
 	"github.com/newo-ether/filo/internal/codex"
 )
 
-// The standalone entry point is the preview gateway an operator starts by hand.
+// The standalone entry point is the private gateway for one user helper.
 // Its tests run the entry function in this process and give it an in-process
 // native app server, because the gateway owns no artifact of its own: what it
 // must be held to is its directory, its lease and its one native client.
@@ -192,7 +192,7 @@ func awaitEntryInfo(t *testing.T, base string, headers map[string]string, accept
 }
 
 // TestStandaloneHelperValidatesItsCredentialAndStopsOnlyItsGateway pins the
-// whole lifecycle of the preview gateway: a credential that is not 256 bits of
+// whole lifecycle of the standalone gateway: a credential that is not 256 bits of
 // hexadecimal refuses the start before any native client is opened, a prepared
 // directory publishes one ready record and one authenticated gateway, and a
 // requested shutdown releases only the gateway, never the independent host.

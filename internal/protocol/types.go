@@ -128,10 +128,8 @@ type ConversationPage struct {
 	InputReceipts []InputReceipt   `json:"inputReceipts,omitempty"`
 }
 
-// TopologyPage is a ConversationPage stripped of message bodies and the page
-// cursor, where the structural node list is required instead of optional.
-// Mirrors the TS type Omit<ConversationPage, 'messages' | 'pageCursor'> &
-// { nodes: MessageNode[] }; payloads stay on the recoverable payload cache.
+// TopologyPage omits message bodies and the page cursor, and requires the node
+// list. Message bodies remain in the recoverable payload cache.
 type TopologyPage struct {
 	Nodes         []MessageNode  `json:"nodes"`
 	NextCursor    *string        `json:"nextCursor"`
@@ -167,9 +165,8 @@ type SendReceipt struct {
 	ClientID string `json:"clientId"`
 }
 
-// ServiceInfo is the immutable capability advertisement spread into the
-// /v1/info response. Field order matches the TS `serviceInfo` declaration,
-// which is also the JSON.stringify key order current clients observe.
+// ServiceInfo is the immutable capability advertisement included in /v1/info.
+// Field order preserves the serialized key order observed by clients.
 type ServiceInfo struct {
 	ProtocolVersion      int    `json:"protocolVersion"`
 	Agent                string `json:"agent"`
@@ -183,7 +180,7 @@ type ServiceInfo struct {
 	SupportsLazyMessages bool   `json:"supportsLazyMessages"`
 }
 
-// CodexServiceInfo mirrors the TS constant `serviceInfo`.
+// CodexServiceInfo advertises the supported Codex adapter capabilities.
 var CodexServiceInfo = ServiceInfo{
 	ProtocolVersion:      2,
 	Agent:                "codex",

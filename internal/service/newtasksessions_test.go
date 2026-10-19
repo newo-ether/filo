@@ -286,10 +286,9 @@ func TestScopedCompletedHistorySupersedesAPartialLiveDelta(t *testing.T) {
 	taskSessionsSameTexts(t, paged.Messages, "Hello")
 }
 
-// TestScopedLostConnectionForgetsItsEntryAndReportsTheChange mirrors the
-// TypeScript `connection.rpc.once('closed')` cleanup: a lost connection drops the
-// entry and reports the task, and the next read therefore follows again instead of
-// reusing the closed connection.
+// TestScopedLostConnectionForgetsItsEntryAndReportsTheChange verifies that a lost
+// connection drops the entry and reports the task. The next read follows again
+// instead of reusing the closed connection.
 func TestScopedLostConnectionForgetsItsEntryAndReportsTheChange(t *testing.T) {
 	fixture := newTaskSessionsFixture(t)
 	ctx := context.Background()
@@ -311,8 +310,7 @@ func TestScopedLostConnectionForgetsItsEntryAndReportsTheChange(t *testing.T) {
 	}
 }
 
-// TestScopedStatusesRefuseMoreThanThirtyTasks verifies the bound the TypeScript
-// adapter enforces without a test of its own.
+// TestScopedStatusesRefuseMoreThanThirtyTasks verifies the status fan-out bound.
 func TestScopedStatusesRefuseMoreThanThirtyTasks(t *testing.T) {
 	fixture := newTaskSessionsFixture(t)
 	ids := make([]string, 31)

@@ -11,8 +11,7 @@ import (
 )
 
 const (
-	// nativeOperationUnconfirmed is the TS fallback of a native operation whose
-	// outcome the original owner did not confirm.
+	// nativeOperationUnconfirmed reports an outcome the original owner did not confirm.
 	nativeOperationUnconfirmed = "Native desktop operation outcome is unconfirmed"
 	nativeSteerUnknown         = "Unknown native steer outcome"
 	nativeStartUnknown         = "Unknown native start outcome"
@@ -21,11 +20,9 @@ const (
 )
 
 var (
-	// errSessionCatalog guards the peripheral catalog of a surface that was built
-	// without one. The TS base object is always present, so this is defensive.
+	// errSessionCatalog reports an unavailable peripheral catalog.
 	errSessionCatalog = errors.New("Filo session catalog is unavailable")
-	// errCreatedScope guards the created-task scope in the same position where the
-	// TS adapter asserts `base.newTasks!`.
+	// errCreatedScope reports a missing created-task scope.
 	errCreatedScope = errors.New("Filo created-task scope is unavailable")
 )
 
@@ -84,8 +81,7 @@ func (sessions *DesktopSessions) Archive(ctx context.Context, id string) (string
 	return cwd, nil
 }
 
-// SetModel is the single-key settings mutation the TS adapter exposes on top of
-// updateSettings.
+// SetModel applies a single model field through UpdateSettings.
 func (sessions *DesktopSessions) SetModel(ctx context.Context, id, model string) error {
 	return sessions.UpdateSettings(ctx, id, protocol.SessionSettings{Model: protocol.Known(model)})
 }
@@ -317,8 +313,7 @@ func desktopInput(value string) []any {
 	return []any{map[string]any{"type": "text", "text": value, "text_elements": []any{}}}
 }
 
-// jsTruthy reproduces the JS truthiness of a native field, which the TS
-// `result?.goalPauseError` check relies on.
+// jsTruthy applies JavaScript truthiness to native fields such as goalPauseError.
 func jsTruthy(value any) bool {
 	switch typed := value.(type) {
 	case nil:

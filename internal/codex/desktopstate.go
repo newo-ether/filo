@@ -37,8 +37,7 @@ func desktopTurns(state map[string]any) []any {
 				continue
 			}
 			seen[key] = true
-			// Set iteration keeps first-occurrence order; entities are
-			// filtered with Boolean like the TS chain.
+			// Keep first-occurrence order and omit falsy entities.
 			if entity := entities[key]; truthy(entity) {
 				turns = append(turns, entity)
 			}
@@ -127,9 +126,8 @@ func turnIDPointer(turn any) *string {
 	return nil
 }
 
-// ProjectDesktop projects only public native messages; transport snapshots
-// never leave Filo unchanged. turnLimit follows the TS falsy gate: 0 means
-// "no limit".
+// ProjectDesktop projects public native messages instead of exposing transport
+// snapshots. A zero turnLimit leaves the turn count unbounded.
 func ProjectDesktop(value any, includeActivity bool, turnLimit float64) (protocol.ConversationPage, error) {
 	state, ok := asMap(value)
 	if !ok {
@@ -137,7 +135,7 @@ func ProjectDesktop(value any, includeActivity bool, turnLimit float64) (protoco
 	}
 	allTurns := desktopTurns(state)
 	turns := allTurns
-	// TS: turnLimit ? allTurns.slice(-turnLimit) : allTurns
+	// Nonzero limits select a suffix using JavaScript slice-index semantics.
 	from := math.Trunc(-turnLimit)
 	if from < 0 && -from < float64(len(allTurns)) {
 		turns = allTurns[len(allTurns)-int(-from):]
@@ -196,9 +194,7 @@ func ProjectDesktop(value any, includeActivity bool, turnLimit float64) (protoco
 			Error:     turn["error"],
 		})
 	}
-	// TS double reverse: projectDesktop calls native.reverse() and
-	// projectMessages reverses again, netting oldest-first output. Our
-	// ProjectMessages already reverses internally, so reverse once here.
+	// ProjectMessages reverses its input; reverse here for oldest-first output.
 	slices.Reverse(native)
 	messages := ProjectMessages(native, includeActivity)
 	// new Map(messages.map(...)): later duplicates overwrite the value but

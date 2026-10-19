@@ -22,8 +22,8 @@ func processAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// detachedProcessAttributes mirrors the TS `detached: true` spawn, which starts
-// the runner in its own session so it survives the leasing helper.
+// detachedProcessAttributes starts the runner in its own session so it survives
+// the leasing helper.
 func detachedProcessAttributes() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setsid: true}
 }

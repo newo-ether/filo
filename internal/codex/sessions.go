@@ -47,9 +47,8 @@ type taskAttachment struct {
 // admitted by the task executor, and it never creates, resumes or executes a
 // task outside that connection.
 //
-// Divergence from the TypeScript EventEmitter: notifications and the close cause
-// arrive through Receive and Disconnected, because a Go transport has exactly one
-// notification handler and its owner dispatches from it.
+// Notifications and close causes arrive through Receive and Disconnected; the
+// connection owner dispatches them from the transport's single handler slot.
 type NativeTaskSession struct {
 	rpc             hostConnection
 	metadata        *NativeMetadata
@@ -91,10 +90,8 @@ func (s *NativeTaskSession) SetClosedHandler(callback func()) {
 // an attached identity is observed, and every observed notification reports that
 // task as changed, whether or not it carried a value this session retains.
 //
-// Divergence from the TypeScript `receive(event: RpcNotification)`: the method and
-// the decoded params are passed separately, which is the Go form of one packet. A
-// threadSettings value that is present but not an object is ignored instead of
-// clearing the recorded settings, which is a malformed-payload difference only.
+// The method and decoded parameters arrive separately. Malformed non-object
+// threadSettings are ignored so they do not clear previously recorded settings.
 func (s *NativeTaskSession) Receive(method string, params any) {
 	fields, ok := nativejson.Fields(params)
 	if !ok {

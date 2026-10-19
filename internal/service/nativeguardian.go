@@ -19,7 +19,7 @@ const (
 	// deployment.
 	guardianExecutableName = "FiloBackground.exe"
 	// guardianReadiness bounds how long a keeper waits for the monitor to
-	// publish itself, and guardianReadinessPoll is the TS `delay(50)`.
+	// publish itself; guardianReadinessPoll sets the readiness check interval.
 	guardianReadiness     = 20 * time.Second
 	guardianReadinessPoll = 50 * time.Millisecond
 )
@@ -82,8 +82,7 @@ func StartNativeGuardian(options NativeGuardianOptions) (*NativeGuardian, error)
 	if readiness <= 0 {
 		readiness = guardianReadiness
 	}
-	// Reaping the monitor keeps Alive meaningful; the TS unref only stops the
-	// child from holding the parent's event loop open.
+	// Reap the monitor so Alive reflects whether its process has exited.
 	var exited atomic.Bool
 	pid := command.Process.Pid
 	alive := func() bool {

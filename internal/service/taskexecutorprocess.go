@@ -34,7 +34,7 @@ const (
 	// executor has already verified terminal native state, so a child that
 	// ignored its closed input is terminated rather than kept.
 	executorReleaseGrace = 1500 * time.Millisecond
-	// executorReconnectDelay is the TS `delay(500)` between reconnects.
+	// executorReconnectDelay controls the interval between reconnect attempts.
 	executorReconnectDelay = 500 * time.Millisecond
 	// executorDesktopRuntimeScript resolves the installed desktop runtime, and
 	// executorDesktopRuntimeTimeout bounds that PowerShell call.
@@ -47,11 +47,8 @@ const (
 
 // ExecutorProcessOptions configures one executor lifecycle run.
 //
-// Divergence from the TS `runTaskExecutor(directory)` signature: every port that
-// makes the run observable (the runtime resolver, the lifetime monitor, the
-// retired-idle budget and the three timing budgets) is injectable, because a Go
-// test cannot substitute a module-level import the way the TS fixture
-// substitutes `node:child_process`. Zero values select the TS defaults.
+// The runtime resolver, lifetime monitor and timing budgets are injectable for
+// lifecycle tests. Zero values select the documented defaults.
 type ExecutorProcessOptions struct {
 	// Directory is the absolute private executor directory with its
 	// configuration.
@@ -392,9 +389,8 @@ func startNativeAppServer(executable, workspace, url, tokenPath string) (*exec.C
 	return command, nil
 }
 
-// nativeProcessEnvironment mirrors the TS environment preparation: every
-// CODEX_APP_SERVER_ override is dropped and the native runtime directory leads
-// PATH, so the child resolves its own runtime before any inherited installation.
+// nativeProcessEnvironment drops CODEX_APP_SERVER_ overrides and puts the native
+// runtime directory first in PATH so the child resolves its own runtime.
 func nativeProcessEnvironment(executable string) []string {
 	environment := make([]string, 0, len(os.Environ())+1)
 	path := ""

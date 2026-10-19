@@ -39,10 +39,8 @@ type payloadEntry struct {
 	bytes   int
 }
 
-// ConversationPayloads caches bounded message bodies behind the mobile
-// topology, which never carries those bodies. The TS original used a Map and
-// relied on single-threaded insertion order; the Go form keeps the same
-// first-in eviction with an explicit ordered list and a lock.
+// ConversationPayloads caches bounded message bodies outside the mobile topology.
+// A mutex protects cached entries and the list used for eviction order.
 type ConversationPayloads struct {
 	mu       sync.Mutex
 	entries  map[string]*list.Element
@@ -51,9 +49,8 @@ type ConversationPayloads struct {
 	maxBytes int
 }
 
-// NewConversationPayloads builds a cache bounded by maxBytes. A non-positive
-// bound caches nothing, matching the TS default-parameter form when a caller
-// passes an explicit zero.
+// NewConversationPayloads builds a cache bounded by maxBytes; non-positive bounds
+// disable caching.
 func NewConversationPayloads(maxBytes int) *ConversationPayloads {
 	return &ConversationPayloads{
 		entries:  map[string]*list.Element{},
@@ -109,8 +106,7 @@ func (p *ConversationPayloads) remember(session string, message protocol.Message
 	return projected
 }
 
-// take promotes a cache hit to the newest position, matching the TS delete and
-// re-set that keeps recently served bodies alive.
+// take promotes a cache hit to the newest position to retain recently served bodies.
 func (p *ConversationPayloads) take(key string) (protocol.Message, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -237,8 +233,7 @@ func (p *ConversationPayloads) Load(ctx context.Context, source ConversationRead
 	return value, nil
 }
 
-// cloneMessage detaches a cached body from the read that produced it, matching
-// the TS JSON round trip that stores a fresh object.
+// cloneMessage detaches a cached body from the read that produced it.
 func cloneMessage(message protocol.Message) protocol.Message {
 	if message.Activity != nil {
 		activity := *message.Activity

@@ -31,8 +31,7 @@ func (reader *fakeReader) Read(_ context.Context, id, cursor string, activity bo
 	return reader.page, nil
 }
 
-// readerFunc lets a test compose one pager in front of another, the way the
-// worker layer wraps the desktop layer in TS.
+// readerFunc composes pagers, such as the worker layer over the desktop layer.
 type readerFunc func(context.Context, string, string, bool, []string) (protocol.ConversationPage, error)
 
 func (f readerFunc) Read(ctx context.Context, id, cursor string, activity bool,

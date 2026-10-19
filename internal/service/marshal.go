@@ -16,8 +16,8 @@ func Marshal(value any) []byte {
 	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(value); err != nil {
-		// TS JSON.stringify only fails on cycles, which decoded native JSON
-		// cannot contain; null keeps byte accounting finite.
+		// Decoded native JSON is acyclic; null keeps size accounting finite
+		// if an unsupported value nevertheless reaches the encoder.
 		return []byte("null")
 	}
 	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n"))

@@ -59,9 +59,8 @@ type executorTurn struct {
 // TaskExecutorOptions carries the private credential and the native lifetime
 // callbacks for one executor.
 //
-// Divergence from the TypeScript constructor: a Go Duration cannot distinguish an
-// omitted argument from zero, so Idle == 0 and Completed == 0 select the defaults
-// instead of immediate retirement. Use a small positive duration for that.
+// Zero Idle and Completed durations select defaults; use a small positive
+// duration when immediate retirement is needed.
 type TaskExecutorOptions struct {
 	// Token is the 64 hex character private executor credential.
 	Token string
@@ -211,14 +210,11 @@ func (e *TaskExecutor) serveClient(writer http.ResponseWriter, request *http.Req
 	for {
 		message, err := socket.ReadMessage()
 		if err != nil {
-			// The TypeScript listener terminated its socket on any transport
-			// error, which also covers an oversized or protocol-violating
-			// packet that never reached a handler.
+			// Close on every transport error, including oversized or invalid packets.
 			socket.Terminate()
 			return
 		}
-		// Each client request is handled independently, exactly as the
-		// TypeScript listener dispatched one async handler per message.
+		// Dispatch each client request independently.
 		go e.receive(socket, string(message))
 	}
 }
@@ -237,9 +233,8 @@ type executorPacket struct {
 	hasID  bool
 }
 
-// decodeExecutorPacket applies the same admission order as the TypeScript
-// listener: a method is required, an id may only be a string or a number, and an
-// initialization notification is recognized before the id check.
+// decodeExecutorPacket requires a method, recognizes initialization notifications
+// before checking the ID, and otherwise accepts only string or numeric IDs.
 func decodeExecutorPacket(text string) (executorPacket, bool) {
 	message, _, err := nativejson.Read(strings.NewReader(text), false)
 	if err != nil {
@@ -312,8 +307,7 @@ func executorFailure(err error) (float64, string) {
 		if rpcError.Code != nil {
 			return *rpcError.Code, rpcError.Message
 		}
-		// The native error object omitted a code, which the TypeScript client
-		// serialized away entirely; a bounded code keeps this wire valid.
+		// Supply a valid RPC error code when the native error omitted one.
 		return -32000, rpcError.Message
 	}
 	if err != nil {
@@ -491,8 +485,8 @@ func (e *TaskExecutor) handleNotification(packet map[string]any) {
 	e.schedule()
 }
 
-// write sends one JSON packet under a write deadline, matching the TypeScript
-// guard that drops a client whose payload or queue exceeds the payload bound.
+// write sends one JSON packet under a write deadline and drops clients whose
+// payload or queued output exceeds the bound.
 func (e *TaskExecutor) write(socket *WebSocket, message any) {
 	if socket.Closed() {
 		return

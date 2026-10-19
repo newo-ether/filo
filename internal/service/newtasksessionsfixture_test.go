@@ -15,7 +15,7 @@ import (
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
-// The two identities the TypeScript fixture pinned.
+// Stable task identities shared by the scoped-session fixtures.
 const (
 	taskSessionsTaskID = "11111111-1111-4111-8111-111111111111"
 	taskSessionsTurnID = "22222222-2222-4222-8222-222222222222"
@@ -28,10 +28,8 @@ type taskSessionsCall struct {
 }
 
 // taskSessionsNative is one scripted native peer behind a real JSONL transport. It
-// answers the exact methods the scoped adapter drives and reproduces every state
-// the TypeScript fixture scripted: a task that is admitted by its own creation, a
-// turn that becomes active, a completion that supersedes a lost notification, and
-// the two refusals the adapter must never retry.
+// answers the adapter's methods and scripts creation admission, active turns,
+// completion after a lost notification and refusals that must never be retried.
 type taskSessionsNative struct {
 	mu        sync.Mutex
 	recorded  []taskSessionsCall
@@ -256,9 +254,8 @@ func (peer *taskSessionsNative) finish() {
 	peer.mu.Unlock()
 }
 
-// taskSessionsTestConnection is one scripted admitted connection: a real JSONL
-// transport plus the close that ends this client, which is what the TypeScript
-// fixture's `close` did by emitting the transport's closed event.
+// taskSessionsTestConnection combines a real JSONL transport with explicit close
+// behavior for one scripted admitted connection.
 type taskSessionsTestConnection struct {
 	rpc *codex.Rpc
 }
@@ -266,10 +263,8 @@ type taskSessionsTestConnection struct {
 func (connection *taskSessionsTestConnection) Transport() *codex.Rpc { return connection.rpc }
 func (connection *taskSessionsTestConnection) Close()                { connection.rpc.Close() }
 
-// taskSessionsTestFactory is the scoped executor factory of one fixture. Its
-// creation provenance is the scripted peer's own admission, exactly like the
-// TypeScript fixture shared one `owned` flag between the factory and the native
-// port, and an executor launch is replaced by the scripted connection.
+// taskSessionsTestFactory shares creation provenance with the scripted native
+// peer and substitutes scripted connections for executor launches.
 type taskSessionsTestFactory struct {
 	peer       *taskSessionsNative
 	connection TaskSessionsConnection
@@ -284,8 +279,7 @@ type taskSessionsTestFactory struct {
 	enteredOnce sync.Once
 }
 
-// holdOpen keeps the next open inside executor startup until releaseOpen, which is
-// what the TypeScript test overrode the factory for.
+// holdOpen blocks the next executor startup until releaseOpen.
 func (factory *taskSessionsTestFactory) holdOpen() {
 	factory.mu.Lock()
 	factory.hold = make(chan struct{})
@@ -511,10 +505,8 @@ func newTaskSessionsFixture(t *testing.T) *taskSessionsFixture {
 	return fixture
 }
 
-// settle waits until this transport delivered everything the peer already wrote.
-// Notification handlers run on the transport's reader goroutine, so a round trip
-// issued afterwards observes them. The TypeScript fixture needed no such step,
-// because it emitted its events on the same call stack.
+// settle waits for the transport to deliver everything the peer already wrote.
+// A round trip observes earlier notifications dispatched by the reader goroutine.
 func (fixture *taskSessionsFixture) settle(t *testing.T) {
 	t.Helper()
 	if _, err := fixture.rpc.Request("thread/read", map[string]any{"threadId": taskSessionsTaskID}); err != nil {

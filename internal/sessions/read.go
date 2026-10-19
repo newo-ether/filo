@@ -19,11 +19,9 @@ type persistedRead struct {
 	err    error
 }
 
-// Read projects one conversation. The caller's exclusion list is deliberately
-// not consulted here: the live projection this surface already followed is the
-// only authority on which turns it merged, exactly as the TS three-argument
-// read behaves. The parameter exists so the desktop surface satisfies the
-// shared session API, where a worker layer passes its own exclusions through.
+// Read projects a conversation using only its followed live turns for exclusions.
+// The shared API accepts excludedTurns for worker layers, but this surface uses
+// its own projection as the authority on turns it already merged.
 func (sessions *DesktopSessions) Read(ctx context.Context, id, cursor string, activity bool,
 	excludedTurns []string) (protocol.ConversationPage, error) {
 	var empty protocol.ConversationPage

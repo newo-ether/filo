@@ -21,9 +21,8 @@ const (
 // hostIdleProbeOptions configures one host preflight.
 type hostIdleProbeOptions struct {
 	// Arguments are the entry point arguments. The first one is the private
-	// loopback WebSocket endpoint of the auxiliary host. An absent argument is
-	// refused by the endpoint validation itself, which is where the TypeScript
-	// script's undefined argument was refused.
+	// loopback WebSocket endpoint of the auxiliary host. Endpoint validation
+	// refuses an absent argument.
 	Arguments []string
 	// Output receives the idle record. Nil selects standard output.
 	Output io.Writer
@@ -37,8 +36,7 @@ func RunHostIdleProbe(arguments []string, stderr io.Writer) int {
 	return runHostIdleProbe(hostIdleProbeOptions{Arguments: arguments, Error: stderr})
 }
 
-// hostIdleProbeReport is the one record an installer reads. The field order
-// matches the TypeScript `JSON.stringify` key order of the script it replaces.
+// hostIdleProbeReport is the ordered JSON record read by an installer.
 type hostIdleProbeReport struct {
 	Idle  bool `json:"idle"`
 	Tasks int  `json:"tasks"`

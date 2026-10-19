@@ -35,10 +35,7 @@ var privateTokenPattern = regexp.MustCompile(`(?i)^[a-f0-9]{64}$`)
 // HostOptions carries the optional private credential and the overall connect
 // budget for ConnectCodexHost.
 //
-// Divergence from the TypeScript caller: timeoutMs === 0 was rejected as an
-// invalid deadline there, while a Go Duration has no way to distinguish "0"
-// from an absent value. Timeout == 0 therefore means "no deadline", and only a
-// negative duration is rejected.
+// Timeout == 0 means no deadline; negative durations are rejected.
 type HostOptions struct {
 	// Token is the private executor credential. Nil means the host expects no
 	// authentication header.
@@ -142,8 +139,7 @@ func (h *CodexHost) pumpInput() {
 	}
 }
 
-// codexHostCause maps a transport failure onto the cause Filo reports to its
-// callers, matching the message the TypeScript listeners produced.
+// codexHostCause maps a transport failure to the diagnostic reported to callers.
 func codexHostCause(err error) error {
 	if errors.Is(err, ErrWebSocketClosed) {
 		return errors.New("Codex host disconnected")
