@@ -26,6 +26,10 @@ size/deadline limits; redirects stay on GitHub HTTPS, archive links/traversal an
 unverified files are rejected before any bundled script executes. Temporary downloads
 are removed on success/failure. Failed downloads never stop the installed service.
 
+Archive/hash failure leaves the installed service running. The bootstrap restores
+its caller's TLS settings and removes temporary downloads after success or failure.
+An explicitly empty `-Clients` list is rejected before downloading or selecting.
+
 For explicit versions or unattended options, save the root `install.ps1` and run it
 with `-Version v0.1.0`, `-Clients <id>`, `-ListClients`, `-ValidateOnly`, `-Bind` or
 `-Port`. The root online entry passes those options to the bundled installer.
@@ -58,6 +62,12 @@ Publish exactly those three files under one `vMAJOR.MINOR.PATCH` release after t
 regression and real installer gates. Publish a complete draft before making it the
 latest release; never replace individual assets of an already published release.
 The preparation script does not publish, tag or change any installed service.
+
+For an authorized local deployment from pending edits, pass `-AllowModifiedSource`
+to `scripts/build-windows.ps1` to build a candidate whose revision is a content digest. Its
+manifest records the source HEAD, modified state and full SHA-256. The build checks
+the source again before sealing the bundle; edits during compilation invalidate it.
+The default build and published release preparation still require clean source.
 
 ## Ownership and recovery
 

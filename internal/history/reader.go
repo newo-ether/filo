@@ -91,6 +91,19 @@ func (history *NativeHistory) Read(ctx context.Context, id, cursor string, activ
 			result.Messages = append(result.Messages, terminal...)
 		}
 	}
-	result.Runtime = &protocol.Runtime{Status: "notLoaded", Model: model, Effort: protocol.Known(effort)}
+	result.Runtime, err = ReadRuntime(ctx, path, id, model, effort, &result.InputReceipts)
+	if err != nil {
+		return result, err
+	}
+	indexedReceipts, err := indexedInputReceipts(ctx, tx, id)
+	if err != nil {
+		return result, err
+	}
+	result.InputReceipts = protocol.MergeInputReceipts(indexedReceipts, result.InputReceipts)
+	if !result.Runtime.CompletedTurnID.Known {
+		if err := indexedCompletion(ctx, tx, id, result.Runtime); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }

@@ -79,9 +79,23 @@ func (h *Hub) end(terminal bool) {
 // Subscribe returns one stream's subscription for a single session identity. A
 // subscription to an already closed hub is closed immediately.
 func (h *Hub) Subscribe(id string) *Subscription {
+	subscription, _ := h.subscribe(id, false)
+	return subscription
+}
+
+// TrySubscribe bounds public streams before they acquire a native attach lease.
+func (h *Hub) TrySubscribe(id string) (*Subscription, bool) { return h.subscribe(id, true) }
+
+const maxEventSubscribers = 64
+
+func (h *Hub) subscribe(id string, bounded bool) (*Subscription, bool) {
 	subscription := &Subscription{hub: h, id: id, signal: make(chan struct{}, 1), closed: make(chan struct{})}
 	h.mu.Lock()
 	closed := h.closed
+	if !closed && bounded && len(h.subscribers) >= maxEventSubscribers {
+		h.mu.Unlock()
+		return nil, false
+	}
 	if !closed {
 		h.subscribers[subscription] = struct{}{}
 	}
@@ -89,7 +103,7 @@ func (h *Hub) Subscribe(id string) *Subscription {
 	if closed {
 		subscription.close()
 	}
-	return subscription
+	return subscription, true
 }
 
 // Signal reports a coalesced pending change.

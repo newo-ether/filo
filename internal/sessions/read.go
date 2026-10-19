@@ -74,7 +74,9 @@ func (sessions *DesktopSessions) Read(ctx context.Context, id, cursor string, ac
 		}
 	}
 	if cursor != "" {
-		return sessions.options.History.Read(ctx, id, cursor, activity, excluded)
+		page, err := sessions.options.History.Read(ctx, id, cursor, activity, excluded)
+		page.InputReceipts = protocol.MergeInputReceipts(page.InputReceipts, live.InputReceipts)
+		return page, err
 	}
 	persisted, err := sessions.persisted(ctx, entry, activity, excluded)
 	if err != nil {
@@ -85,6 +87,7 @@ func (sessions *DesktopSessions) Read(ctx context.Context, id, cursor string, ac
 	}
 	live.Messages = mergeTurns(persisted.Messages, live.Messages)
 	live.NextCursor = persisted.NextCursor
+	live.InputReceipts = protocol.MergeInputReceipts(persisted.InputReceipts, live.InputReceipts)
 	return live, nil
 }
 

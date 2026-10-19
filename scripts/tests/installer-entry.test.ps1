@@ -12,7 +12,7 @@ try {
     # The actual entrypoint consumes fixture discovery/prerequisites, never OS mutations.
     [IO.File]::WriteAllText((Join-Path $modules 'Client-Selection.ps1'),@'
 Set-StrictMode -Version 2
-function Get-FiloClients { $global:FiloEntryClients }
+function Get-FiloClients { if($ProgressPreference -ne 'SilentlyContinue'){throw 'Installer progress can block native remoting'}; $global:FiloEntryClients }
 function Resolve-FiloSelection { param($Clients,$Ids) $Clients }
 function Select-FiloClients { param($Clients) $Clients }
 '@)

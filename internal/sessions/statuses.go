@@ -102,14 +102,12 @@ func (sessions *DesktopSessions) rowStatus(ctx context.Context, id string, liste
 		}
 		return codex.DesktopStatus(state), false
 	}
-	sessions.f.mu.Lock()
-	seen := sessions.f.seen[id]
-	sessions.f.mu.Unlock()
-	if sessions.options.Created != nil && !seen {
-		return value, true
-	}
-	if seen || listed {
+	owned, err := sessions.created(ctx, id)
+	if err != nil {
 		return value, false
+	}
+	if owned {
+		return value, true
 	}
 	page, err := sessions.options.History.Read(ctx, id, "", false, nil)
 	if err == nil && page.Runtime != nil {
@@ -118,6 +116,8 @@ func (sessions *DesktopSessions) rowStatus(ctx context.Context, id string, liste
 			status := runtime.Status
 			value.Status = &status
 			value.ActiveTurnID = runtime.ActiveTurnID
+		}
+		if runtime.CompletedTurnID.Known {
 			value.CompletedTurnID = runtime.CompletedTurnID.Value
 		}
 	}

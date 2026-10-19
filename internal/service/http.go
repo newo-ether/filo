@@ -188,11 +188,11 @@ func (t *tracking) Write(data []byte) (int, error) {
 	return t.ResponseWriter.Write(data)
 }
 
-func (t *tracking) Flush() {
-	if flusher, ok := t.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
+func (t *tracking) FlushError() error {
+	return http.NewResponseController(t.ResponseWriter).Flush()
 }
+
+func (t *tracking) Flush() { _ = t.FlushError() }
 
 func (t *tracking) Unwrap() http.ResponseWriter { return t.ResponseWriter }
 
@@ -204,6 +204,7 @@ type infoResponse struct {
 	Device               string         `json:"device"`
 	SupportsSafeShutdown bool           `json:"supportsSafeShutdown"`
 	Desktop              *DesktopStatus `json:"desktop,omitempty"`
+	Build                buildInfo      `json:"build"`
 }
 
 type modelsResponse struct {
@@ -274,7 +275,9 @@ func (s *Server) fail(w *tracking, err error) {
 }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	w := &tracking{ResponseWriter: writer}
+	bounded := newDeadlineResponseWriter(writer, responseWriteTimeout)
+	defer bounded.finish()
+	w := &tracking{ResponseWriter: bounded}
 	if request.Header.Get("Origin") != "" || !s.authorized(request.Header.Get("Authorization")) {
 		_ = s.respond(w, http.StatusUnauthorized, errorResponse{Error: "Unauthorized"})
 		return
@@ -395,10 +398,14 @@ func (s *Server) info(w *tracking) error {
 		ServiceInfo:          protocol.CodexServiceInfo,
 		Device:               s.hostname,
 		SupportsSafeShutdown: s.shutdown != nil,
+		Build:                currentBuildInfo("gateway"),
 	}
 	if s.identity != nil {
 		info.SessionMode = s.identity.SessionMode
 		info.Device = s.identity.Device
+		if s.identity.SessionMode == "standalone" {
+			info.Build.Component = "helper"
+		}
 	}
 	if s.desktopStatus != nil {
 		value := s.desktopStatus()
@@ -577,7 +584,7 @@ func (s *Server) mutate(w *tracking, request *http.Request, id, action string) e
 	if err != nil {
 		return s.respond(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
 	}
-	ctx := request.Context()
+	ctx := s.mutationContext(request, id, action)
 	switch action {
 	case "rename":
 		name, ok := input["name"].(string)

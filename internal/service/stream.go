@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"github.com/newo-ether/filo/internal/apierror"
 	"io"
 	"net/http"
@@ -48,6 +49,16 @@ func pageRuntime(page any) *protocol.Runtime {
 // never disturbs this stream.
 func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 	payloads *ConversationPayloads, withBodies bool) error {
+	subscription, admitted := s.events.TrySubscribe(id)
+	if !admitted {
+		return CodexRpcError("Too many event subscriptions", -32600)
+	}
+	defer subscription.Close()
+	select {
+	case <-subscription.Closed():
+		return nil
+	default:
+	}
 	release, err := s.sessions.Attach(ctx, id)
 	if err != nil {
 		return err
@@ -56,19 +67,20 @@ func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 	if err := ctx.Err(); err != nil {
 		return nil
 	}
-	subscription := s.events.Subscribe(id)
-	defer subscription.Close()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-	flusher, _ := w.(http.Flusher)
-	flush := func() {
-		if flusher != nil {
-			flusher.Flush()
+	flush := func() error {
+		err := http.NewResponseController(w).Flush()
+		if errors.Is(err, http.ErrNotSupported) {
+			return nil
 		}
+		return err
 	}
-	flush()
+	if err := flush(); err != nil {
+		return err
+	}
 	previous := ""
 	awaitingNativeState := false
 	refresh := func() error {
@@ -90,7 +102,7 @@ func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 				return err
 			}
 			previous = text
-			flush()
+			return flush()
 		}
 		return nil
 	}
@@ -110,7 +122,9 @@ func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
 				return err
 			}
-			flush()
+			if err := flush(); err != nil {
+				return err
+			}
 			if !awaitingNativeState {
 				continue
 			}

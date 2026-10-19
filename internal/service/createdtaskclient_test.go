@@ -506,9 +506,10 @@ func TestCreatedTaskClientReportsStreamFailures(t *testing.T) {
 	if err := fixture.subscriptionError(task); err.Error() != "Filo task stream disconnected" {
 		t.Fatalf("stream failure = %v", err)
 	}
+	fixture.scriptStatus(http.StatusServiceUnavailable)
 	if _, err := fixture.client.Read(context.Background(), task, nil, true); err == nil ||
-		err.Error() != "Filo task stream disconnected" {
-		t.Fatalf("read after a stream failure = %v", err)
+		err.Error() != "Filo task stream is unavailable" {
+		t.Fatalf("read after a refused recovery = %v", err)
 	}
 	if len(fixture.changeList()) == 0 {
 		t.Fatal("no page change was reported")

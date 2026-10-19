@@ -5,6 +5,7 @@ package service
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -102,4 +103,31 @@ func assertNoChildConsole(t *testing.T, path string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("child did not publish its console state")
+}
+
+func TestProcessAliveRejectsExitedProcessWithRetainedHandle(t *testing.T) {
+	command := exec.Command("cmd.exe", "/d", "/c", "exit", "/b", "0")
+	command.SysProcAttr = detachedProcessAttributes()
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := command.Process.Pid
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		_ = command.Wait()
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+	if err := command.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if processAlive(pid) {
+		t.Fatal("an exited process with a retained handle still blocks idle recovery")
+	}
+	if !processAlive(os.Getpid()) {
+		t.Fatal("the current running process was reported as exited")
+	}
+	if processAlive(0) || processAlive(-1) {
+		t.Fatal("an invalid PID was reported as running")
+	}
 }

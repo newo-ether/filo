@@ -33,7 +33,7 @@ type History interface {
 	Read(context.Context, string, string, bool, []string) (protocol.ConversationPage, error)
 }
 
-// CreatedReader can only expose the separately verified Filo-created scope.
+// CreatedReader exposes the separately verified creation or recovery scope.
 // Being present in ordinary history never grants this ownership. A successful
 // attachment returns its own release action, which is the TS detach.
 type CreatedReader interface {
@@ -85,11 +85,25 @@ func (sessions *DesktopSessions) SourceChanged(id string) {
 }
 
 func (sessions *DesktopSessions) created(ctx context.Context, id string) (bool, error) {
+	if sessions.options.Created == nil {
+		return false, nil
+	}
 	sessions.f.mu.Lock()
 	seen := sessions.f.seen[id]
 	sessions.f.mu.Unlock()
-	if seen || sessions.options.Created == nil {
-		return false, nil
+	if seen {
+		// Historical creation provenance cannot replace a desktop owner. A
+		// separately verified recovery can still be followed after it disappears.
+		scope, ok := sessions.options.Created.(interface {
+			Created(context.Context, string) (bool, error)
+		})
+		if !ok {
+			return false, nil
+		}
+		created, err := scope.Created(ctx, id)
+		if err != nil || created {
+			return false, err
+		}
 	}
 	return sessions.options.Created.Owns(ctx, id)
 }

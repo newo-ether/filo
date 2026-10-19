@@ -6,7 +6,11 @@ helper connects to a separately supervised, unchanged runtime bundled with the
 selected Codex Desktop. No separate CLI installation is required.
 The current [connection contract](codex-connection-contract.md) requires IPC first,
 forbids desktop control, and permits an additional native process only for a proven
-IPC capability gap. A missing owner or failed request cannot trigger an alternate writer.
+IPC capability gap. A missing owner or failed request alone cannot trigger another
+writer. An explicit Send/settings request may recover an existing thread only after
+proving it is idle under the selected account and rechecking absent IPC ownership;
+native resume must still acquire its writer lock without takeover. GET, catalog,
+Attach and SSE remain read-only and never allocate an executor.
 
 The helper's `NativeMetadata` component provides the model catalog, rename and
 native archive. It has no create, resume, send or stop interface. The withdrawn
@@ -15,8 +19,13 @@ cannot prevent helper startup. Native metadata writes are never replayed.
 
 New tasks use `TaskExecutorFactory` and a private executor for their exact native
 identity. Creation provenance is recorded only after `thread/start` acknowledges
-that identity. Browsing cannot add an ordinary task to this scope or allocate a
-writer. An original desktop owner takes precedence over the Filo-created scope.
+that identity. Explicit idle recovery has its own exact-thread admission; ordinary
+history presence grants no writer authority. Browsing cannot admit a task or allocate
+a writer. An original desktop owner takes precedence over every auxiliary scope.
+On Windows, an openable process handle alone does not prove a live native writer:
+exited processes may retain their handles. Replacement still requires exact-task
+idle admission, an exited published writer and no live guardian; denied process
+access or unreadable exit status cannot establish that the writer ended.
 
 `NativeTaskSession` handles only that admitted executor's creation, settings,
 runtime metadata, stop and archive. `NativeHistory` is the sole persisted-history
@@ -29,7 +38,7 @@ its cursor is reached through the rollout/index boundary.
 Both catalog metadata and native execution state are required for a complete new-task
 flow. Creating an empty catalog entry alone does not prove first-message delivery.
 The public gateway routes existing live tasks to their original desktop owner and
-Filo-created ownerless tasks to their authenticated private executor. The unchanged
+Filo-created and explicitly recovered idle tasks to their authenticated private executor. The unchanged
 native runtime retains accepted execution independently of the gateway. A keeper and
 independent GUI lifetime observer release only that owned native process after verified
 completion. Missing lifetime protection fences new input. Isolated native tests do

@@ -2,6 +2,7 @@ package history
 
 import (
 	"context"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -56,5 +57,55 @@ func TestRecordsDetectTruncationCancellationAndEarlyConsumerExit(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatal("Consumer exit failed")
+	}
+}
+
+type boundedRecordReader struct {
+	testing *testing.T
+	source  io.ReaderAt
+	lower   int64
+	bytes   int64
+}
+
+func (reader *boundedRecordReader) ReadAt(buffer []byte, offset int64) (int, error) {
+	reader.testing.Helper()
+	if offset < reader.lower {
+		reader.testing.Fatalf("Record scan crossed lower bound: %d < %d", offset, reader.lower)
+	}
+	reader.bytes += int64(len(buffer))
+	return reader.source.ReadAt(buffer, offset)
+}
+
+func TestRecordsStopInsideOversizedCompleteAndUnfinishedTails(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		text := "old\n" + strings.Repeat("x", 4*scanBytes+71)
+		if complete {
+			text += "\n"
+		}
+		before := int64(len(text))
+		lower := before - scanBytes - 7
+		reader := &boundedRecordReader{testing: t, source: strings.NewReader(text), lower: lower}
+		for span, err := range records(context.Background(), reader, before, lower) {
+			t.Fatalf("Partial bounded record was returned: %+v, %v", span, err)
+		}
+		if reader.bytes != before-lower {
+			t.Fatalf("Tail scan read %d bytes, want %d", reader.bytes, before-lower)
+		}
+	}
+}
+
+func TestRecordsBoundKeepsOnlyFullyDelimitedRecords(t *testing.T) {
+	text := "old\ncrossing\nnewest\n"
+	lower := int64(7)
+	reader := &boundedRecordReader{testing: t, source: strings.NewReader(text), lower: lower}
+	var got []string
+	for span, err := range records(context.Background(), reader, int64(len(text)), lower) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, text[span.start:span.end])
+	}
+	if !reflect.DeepEqual(got, []string{"newest"}) {
+		t.Fatalf("Bounded records = %v", got)
 	}
 }

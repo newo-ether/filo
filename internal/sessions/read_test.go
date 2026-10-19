@@ -141,7 +141,8 @@ func TestReadMergesLiveTurnsCachesHistoryAndPreservesCursor(t *testing.T) {
 			if !reflect.DeepEqual(excluded, []string{"live"}) {
 				t.Errorf("Excluded turns %v", excluded)
 			}
-			return protocol.ConversationPage{Messages: []protocol.Message{historical("old", "old-turn", 1), historical("stale", "live", 2)}, NextCursor: &next}, nil
+			receipt := protocol.InputReceipt{ClientID: "off-page-client", TurnID: "older-turn", MessageID: "older-user"}
+			return protocol.ConversationPage{Messages: []protocol.Message{historical("old", "old-turn", 1), historical("stale", "live", 2)}, NextCursor: &next, InputReceipts: []protocol.InputReceipt{receipt}}, nil
 		}}
 		s, _ := readFixture(h)
 		defer s.Close()
@@ -149,6 +150,9 @@ func TestReadMergesLiveTurnsCachesHistoryAndPreservesCursor(t *testing.T) {
 			page, err := s.Read(context.Background(), "task", "", false, nil)
 			if err != nil || len(page.Messages) != 2 || page.Messages[0].ID != "old" || page.Messages[1].ID != "answer" || page.NextCursor == nil || *page.NextCursor != "older" || page.Runtime.Status != "active" {
 				t.Fatal(page, err)
+			}
+			if len(page.InputReceipts) != 1 || page.InputReceipts[0].ClientID != "off-page-client" || page.InputReceipts[0].MessageID != "older-user" {
+				t.Fatal("Desktop live page lost independent off-page receipt", page.InputReceipts)
 			}
 		}
 		if h.reads.Load() != 1 {

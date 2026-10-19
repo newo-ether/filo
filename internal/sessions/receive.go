@@ -105,6 +105,9 @@ func (f *Followers) Receive(message desktop.Message) {
 		return
 	}
 	entry.revision = int64(revision)
+	entry.recordSettingsEvidence(change)
+	close(entry.updated)
+	entry.updated = make(chan struct{})
 	delete(f.retry, id)
 	f.settleLocked(entry, nil)
 	f.mu.Unlock()

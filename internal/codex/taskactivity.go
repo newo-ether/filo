@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"github.com/newo-ether/filo/internal/nativejson"
 	"github.com/newo-ether/filo/internal/protocol"
@@ -33,6 +34,7 @@ type taskActivityEntry struct {
 // buffer only bridges the window between an accepted turn and the publication of
 // its catalog row.
 type TaskActivity struct {
+	mu       sync.RWMutex
 	id       string
 	maxItems int
 	maxChars int
@@ -73,6 +75,8 @@ func NewTaskActivityWith(id string, maxItems, maxChars int) *TaskActivity {
 // turn id that is present but not text is refused outright instead of being kept
 // as a non-text identity, which is a malformed-payload difference only.
 func (a *TaskActivity) Receive(method string, params any) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	fields, ok := nativejson.Fields(params)
 	if !ok {
 		return
@@ -245,8 +249,10 @@ func (a *TaskActivity) clear() {
 // anchor.
 func (a *TaskActivity) Merge(messages []protocol.Message, currentTurnID *string,
 	activity bool, preferPersisted bool) []protocol.Message {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	if a.turnID == "" || currentTurnID == nil || *currentTurnID != a.turnID {
-		return messages
+		return taskActivitySnapshot(messages)
 	}
 	positions := make(map[string]int, len(a.order))
 	for index, id := range a.order {
@@ -264,26 +270,37 @@ func (a *TaskActivity) Merge(messages []protocol.Message, currentTurnID *string,
 			currentTurnPersisted = true
 		}
 	}
-	merged := make([]protocol.Message, 0, len(messages)+len(a.order))
-	for _, message := range messages {
-		if entry := a.entries[message.ID]; entry != nil && !entry.complete && !preferPersisted {
-			merged = append(merged, entry.message)
-			continue
-		}
-		merged = append(merged, message)
-	}
+	// An accepted steering input can reach history before the live block that
+	// preceded it. Retain that native order by placing missing blocks before
+	// their next persisted anchor instead of appending every block to the page.
+	before := make(map[string][]protocol.Message)
+	pending := make([]protocol.Message, 0, len(a.order))
 	for index, id := range a.order {
 		if present[id] {
+			if len(pending) > 0 {
+				before[id] = pending
+				pending = nil
+			}
 			continue
 		}
 		entry := a.entries[id]
 		if entry.complete && currentTurnPersisted && !(anchor >= 0 && index > anchor) {
 			continue
 		}
-		merged = append(merged, entry.message)
+		pending = append(pending, entry.message)
 	}
+	merged := make([]protocol.Message, 0, len(messages)+len(a.order))
+	for _, message := range messages {
+		merged = append(merged, before[message.ID]...)
+		if entry := a.entries[message.ID]; entry != nil && !entry.complete && !preferPersisted {
+			merged = append(merged, entry.message)
+			continue
+		}
+		merged = append(merged, message)
+	}
+	merged = append(merged, pending...)
 	if activity {
-		return merged
+		return taskActivitySnapshot(merged)
 	}
 	// The activity channel is an opt-in addition to the page, never a substitute.
 	filtered := make([]protocol.Message, 0, len(merged))
@@ -292,7 +309,31 @@ func (a *TaskActivity) Merge(messages []protocol.Message, currentTurnID *string,
 			filtered = append(filtered, message)
 		}
 	}
-	return filtered
+	return taskActivitySnapshot(filtered)
+}
+
+// taskActivitySnapshot gives readers independent message payloads, including all
+// mutable fields retained by the live buffer or supplied by persisted history.
+func taskActivitySnapshot(messages []protocol.Message) []protocol.Message {
+	if messages == nil {
+		return nil
+	}
+	copied := make([]protocol.Message, len(messages))
+	for index, message := range messages {
+		if message.ClientID != nil {
+			clientID := *message.ClientID
+			message.ClientID = &clientID
+		}
+		if message.ImageLinks != nil {
+			message.ImageLinks = append([]string{}, message.ImageLinks...)
+		}
+		if message.Activity != nil {
+			activity := *message.Activity
+			message.Activity = &activity
+		}
+		copied[index] = message
+	}
+	return copied
 }
 
 // taskActivitySummaryText joins the non-blank paragraphs of one reasoning

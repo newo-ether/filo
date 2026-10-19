@@ -13,16 +13,21 @@ type recordSpan struct{ start, end int64 }
 
 // records walks complete JSONL records backwards with one fixed buffer. A
 // trailing unfinished append never becomes a message or a cursor boundary.
-func records(ctx context.Context, file io.ReaderAt, before int64) iter.Seq2[recordSpan, error] {
+// An optional lower bound stops reads even inside a single oversized record.
+func records(ctx context.Context, file io.ReaderAt, before int64, lowerBound ...int64) iter.Seq2[recordSpan, error] {
 	return func(yield func(recordSpan, error) bool) {
+		lower := int64(0)
+		if len(lowerBound) > 0 {
+			lower = min(before, max(int64(0), lowerBound[0]))
+		}
 		buffer := make([]byte, scanBytes)
 		position, end := before, int64(-1)
-		for position > 0 {
+		for position > lower {
 			if err := ctx.Err(); err != nil {
 				yield(recordSpan{}, err)
 				return
 			}
-			start := max(int64(0), position-int64(len(buffer)))
+			start := max(lower, position-int64(len(buffer)))
 			length := int(position - start)
 			n, err := file.ReadAt(buffer[:length], start)
 			if n != length {
@@ -45,7 +50,7 @@ func records(ctx context.Context, file io.ReaderAt, before int64) iter.Seq2[reco
 			}
 			position = start
 		}
-		if end > 0 {
+		if lower == 0 && end > 0 {
 			yield(recordSpan{0, end}, nil)
 		}
 	}

@@ -258,9 +258,17 @@ func TestStandaloneHelperValidatesItsCredentialAndStopsOnlyItsGateway(t *testing
 	if count := native.connectionCount(); count != 1 {
 		t.Fatalf("the gateway opened %d native connections", count)
 	}
-	ready := `{"ready":true,"mode":"standalone","address":"127.0.0.1","port":` + strconv.Itoa(port) + "}\n"
-	if output.String() != ready {
+	var ready map[string]any
+	if err := json.Unmarshal([]byte(output.String()), &ready); err != nil {
+		t.Fatalf("ready record = %q: %v", output.String(), err)
+	}
+	if ready["ready"] != true || ready["mode"] != "standalone" || ready["address"] != "127.0.0.1" || ready["port"] != float64(port) {
 		t.Fatalf("ready record = %q", output.String())
+	}
+	assertBuildIdentity(t, ready["build"], "helper")
+	assertBuildIdentity(t, info["build"], "helper")
+	if strings.Contains(output.String(), token) {
+		t.Fatal("readiness disclosed the token")
 	}
 	assertEntryFixtureFile(t, filepath.Join(directory, entryConfigName), string(config))
 	assertEntryFixtureFile(t, filepath.Join(directory, entryTokenName), token)

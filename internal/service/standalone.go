@@ -89,13 +89,13 @@ func runStandalone(options standaloneOptions) int {
 	return latch.wait()
 }
 
-// standaloneReady is the one record a launcher reads from standard output. The
-// field order matches the TypeScript `JSON.stringify` key order.
+// standaloneReady is the one record a launcher reads from standard output.
 type standaloneReady struct {
-	Ready   bool   `json:"ready"`
-	Mode    string `json:"mode"`
-	Address string `json:"address"`
-	Port    int    `json:"port"`
+	Ready   bool      `json:"ready"`
+	Mode    string    `json:"mode"`
+	Address string    `json:"address"`
+	Port    int       `json:"port"`
+	Build   buildInfo `json:"build"`
 }
 
 // serveStandalone admits one standalone gateway and blocks until it stops. Every
@@ -196,6 +196,7 @@ func serveStandalone(options standaloneOptions, latch *exitLatch, gateway *stand
 		Mode:    "standalone",
 		Address: bind,
 		Port:    port,
+		Build:   currentBuildInfo("helper"),
 	})
 	<-latch.done
 	return nil

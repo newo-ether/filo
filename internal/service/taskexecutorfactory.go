@@ -14,6 +14,7 @@ import (
 
 	"github.com/newo-ether/filo/internal/codex"
 	"github.com/newo-ether/filo/internal/protocol"
+	"github.com/newo-ether/filo/internal/sessions"
 )
 
 const (
@@ -114,23 +115,10 @@ func NewTaskExecutorFactory(options TaskExecutorFactoryOptions) (*TaskExecutorFa
 	return factory, nil
 }
 
-// Owns reports whether this helper durably created one task, which is the only
-// admission proof that allows a native writer to be attached to it.
+// Owns reports creation or recovery provenance. Recovery permits reconnecting
+// the recorded executor; replacement writers still require idle admission.
 func (f *TaskExecutorFactory) Owns(taskID string) (bool, error) {
-	if !taskIDPattern.MatchString(taskID) {
-		return false, nil
-	}
-	value, err := ReadExecutorFile(filepath.Join(f.directory, "tasks", taskID), executorOriginName)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
-	}
-	if _, err := ExecutorReference(value); err != nil {
-		return false, err
-	}
-	return true, nil
+	return taskScope(f.directory, taskID, true)
 }
 
 // Open returns a connection to the private executor of one task, allocating a
@@ -183,7 +171,7 @@ func (f *TaskExecutorFactory) openOnce(ctx context.Context, taskID *string) (*co
 		}
 		return f.connect(ctx, directory, nil, f.readiness)
 	}
-	directory, ok, err := f.existing(*taskID, true)
+	directory, ok, err := f.existingFor(ctx, *taskID, true)
 	if err != nil {
 		return nil, err
 	}
@@ -230,11 +218,16 @@ func (f *TaskExecutorFactory) Follow(ctx context.Context, taskID string) (*codex
 	if existErr != nil {
 		return nil, existErr
 	}
-	if !ok {
+	if !ok || errors.Is(err, errExecutorUnavailable) {
+		// A browsing read may use bounded native history when the recorded
+		// executor cannot be reached. This never admits a replacement writer;
+		// explicit mutations still go through Open and its ownership checks.
 		return nil, nil
 	}
 	return nil, err
 }
+
+var errExecutorUnavailable = errors.New("Filo native executor is not ready")
 
 // Close fences new work. It never signals a native process: an in-flight
 // connection is closed by the caller that receives it.
@@ -325,8 +318,20 @@ func (f *TaskExecutorFactory) allocate(taskID *string, createTrace string) (stri
 	// exists, because admission recorded its origin before this attempt.
 	if taskID != nil {
 		task := filepath.Join(f.directory, "tasks", *taskID)
+		if err := os.MkdirAll(task, 0o700); err != nil {
+			return "", err
+		}
 		if err := SaveExecutorFile(task, executorCurrentName, map[string]string{"executorId": executorID}); err != nil {
 			return "", err
+		}
+		created, err := taskScope(f.directory, *taskID, false)
+		if err != nil {
+			return "", err
+		}
+		if !created {
+			if err := SaveExecutorFile(task, executorRecoveryName, map[string]string{"executorId": executorID}); err != nil {
+				return "", err
+			}
 		}
 	}
 	if err := f.launch(directory); err != nil {
@@ -339,12 +344,25 @@ func (f *TaskExecutorFactory) allocate(taskID *string, createTrace string) (stri
 // existing locates the executor directory of one owned task, optionally
 // allocating a replacement writer when the recorded attempt already ended.
 func (f *TaskExecutorFactory) existing(taskID string, mayLaunch bool) (string, bool, error) {
+	return f.existingFor(context.Background(), taskID, mayLaunch)
+}
+
+func (f *TaskExecutorFactory) existingFor(ctx context.Context, taskID string, mayLaunch bool) (string, bool, error) {
+	created, err := taskScope(f.directory, taskID, false)
+	if err != nil {
+		return "", false, err
+	}
+	mayAllocate := mayLaunch && (created || sessions.IdleRecoveryAllowed(ctx, taskID))
 	owned, err := f.Owns(taskID)
 	if err != nil {
 		return "", false, err
 	}
 	if !owned {
-		return "", false, errors.New("Task is outside Filo creation scope")
+		if !mayAllocate {
+			return "", false, nil
+		}
+		directory, err := f.allocate(&taskID, "")
+		return directory, err == nil, err
 	}
 	task := filepath.Join(f.directory, "tasks", taskID)
 	reference, err := ReadExecutorFile(task, executorCurrentName)
@@ -353,6 +371,9 @@ func (f *TaskExecutorFactory) existing(taskID string, mayLaunch bool) (string, b
 			return "", false, err
 		}
 		reference, err = ReadExecutorFile(task, executorOriginName)
+		if errors.Is(err, fs.ErrNotExist) {
+			reference, err = ReadExecutorFile(task, executorRecoveryName)
+		}
 		if err != nil {
 			return "", false, err
 		}
@@ -373,8 +394,8 @@ func (f *TaskExecutorFactory) existing(taskID string, mayLaunch bool) (string, b
 	if state.TaskID == nil || *state.TaskID != taskID {
 		return "", false, errors.New("Executor task identity does not match")
 	}
-	if state.Phase == "retired" || state.Phase == "exited" {
-		if !mayLaunch {
+	if state.Phase == "retired" || state.Phase == "exited" || executorWriterEnded(state) && sessions.IdleRecoveryAllowed(ctx, taskID) {
+		if !mayAllocate {
 			return "", false, nil
 		}
 		directory, err := f.allocate(&taskID, "")
@@ -436,7 +457,7 @@ func (f *TaskExecutorFactory) connect(ctx context.Context, directory string, tas
 		}
 		time.Sleep(executorReadinessPoll)
 	}
-	return nil, errors.New("Filo native executor is not ready")
+	return nil, errExecutorUnavailable
 }
 
 func (f *TaskExecutorFactory) isStopped() bool {

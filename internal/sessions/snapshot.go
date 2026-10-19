@@ -35,7 +35,7 @@ func (f *Followers) acquire(id, owner string, retain, readOnly bool) (*followed,
 			f.mu.Unlock()
 			return nil, errors.New("Too many desktop subscriptions")
 		}
-		entry = &followed{id: id, owner: owner, revision: -1, used: time.Now(), ready: make(chan struct{})}
+		entry = &followed{id: id, owner: owner, revision: -1, used: time.Now(), ready: make(chan struct{}), updated: make(chan struct{})}
 		f.entries[id] = entry
 	}
 	entry.used = time.Now()

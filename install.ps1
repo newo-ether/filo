@@ -21,6 +21,10 @@ $installerOptions = @{}
 foreach ($name in @('Clients','ListClients','ValidateOnly','Uninstall','Bind','Port')) {
     if ($PSBoundParameters.ContainsKey($name)) { $installerOptions[$name] = $PSBoundParameters[$name] }
 }
+if ($installerOptions.ContainsKey('Clients') -and
+    (-not $Clients -or @($Clients | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count)) {
+    throw 'Clients must contain at least one non-empty client ID. Use -ListClients to discover IDs.'
+}
 
 function Assert-FiloDownloadUrl {
     param([uri]$Url)
@@ -177,6 +181,8 @@ function Assert-FiloReleaseContents {
 
 & {
     $ErrorActionPreference = 'Stop'
+    # This child scope preserves the caller's preference in the irm | iex path.
+    $ProgressPreference = 'SilentlyContinue'
     Set-StrictMode -Version 2
     $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ($env:OS -ne 'Windows_NT' -or $architecture -ne 'AMD64') {
@@ -188,7 +194,7 @@ function Assert-FiloReleaseContents {
     if (-not $admin -and -not ($ValidateOnly -or $ListClients)) {
         throw 'Open PowerShell as administrator, then run this command again. No changes were made.'
     }
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $previousSecurityProtocol = [Net.ServicePointManager]::SecurityProtocol
     $stage = Join-Path ([IO.Path]::GetTempPath()) ('Filo-Install-' + [guid]::NewGuid().ToString('N'))
     $stage = [IO.Path]::GetFullPath($stage)
     for ($part = Split-Path -Parent $stage; $part; $part = Split-Path -Parent $part) {
@@ -198,6 +204,7 @@ function Assert-FiloReleaseContents {
     }
     New-Item -ItemType Directory -Path $stage | Out-Null
     try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $acl = [Security.AccessControl.DirectorySecurity]::new()
         $acl.SetAccessRuleProtection($true,$false)
         foreach ($sid in @('S-1-5-18','S-1-5-32-544',$identity.User.Value) | Select-Object -Unique) {
@@ -232,6 +239,7 @@ function Assert-FiloReleaseContents {
         Write-Host '  [3/3] Discovering clients and starting the installer...' -ForegroundColor Cyan
         & (Join-Path $bundle 'Install-Filo.ps1') @installerOptions
     } finally {
+        [Net.ServicePointManager]::SecurityProtocol = $previousSecurityProtocol
         $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
         if (-not $stage.StartsWith($temporaryRoot,[StringComparison]::OrdinalIgnoreCase) -or
             (Split-Path -Leaf $stage) -notmatch '^Filo-Install-[a-f0-9]{32}$') { throw 'Refusing cleanup outside the installer temporary directory.' }

@@ -27,10 +27,12 @@ type Hooks struct {
 type followed struct {
 	id, owner              string
 	revision               int64
+	settingsEvidence       desktopSettingsEvidence
 	state                  codex.DesktopState
 	used                   time.Time
 	refs                   int
 	ready                  chan struct{}
+	updated                chan struct{}
 	settled, readRequested bool
 	err                    error
 	persisted              *persistedRead
@@ -91,6 +93,7 @@ func (f *Followers) dropLocked(entry *followed, err error) bool {
 		return false
 	}
 	delete(f.entries, entry.id)
+	close(entry.updated)
 	if entry.persisted != nil {
 		entry.persisted.cancel()
 	}

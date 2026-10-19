@@ -15,6 +15,10 @@ Original active tasks remain with their existing owner. An independently started
 process cannot control a task merely because it can read the same history or ID.
 Discovery is not control authority, and shared files do not grant writer ownership.
 Filo-created tasks use their own verified execution scope and independent lifetime.
+An explicit Send or settings request may admit an existing ownerless idle thread
+after authoritative native-state and account checks and a final IPC owner recheck.
+The native resume lock remains mandatory. Active or unknown state is refused;
+list/history/subscription reads never admit a writer.
 
 ## Ownership and failure
 

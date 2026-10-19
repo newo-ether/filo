@@ -90,11 +90,10 @@ func (sessions *DesktopSessions) SetModel(ctx context.Context, id, model string)
 	return sessions.UpdateSettings(ctx, id, protocol.SessionSettings{Model: protocol.Known(model)})
 }
 
-// UpdateSettings validates the requested capabilities against the confirmed
-// snapshot and mutates the original owner. A confirmed acknowledgement is not a
-// readback: the next session snapshot still reports the native truth.
+// UpdateSettings validates the requested capabilities and waits for a fresh native
+// snapshot to confirm application by the original owner.
 func (sessions *DesktopSessions) UpdateSettings(ctx context.Context, id string, settings protocol.SessionSettings) error {
-	owner, err := sessions.destination(ctx, id)
+	owner, mutationCtx, err := sessions.mutationDestination(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -102,7 +101,7 @@ func (sessions *DesktopSessions) UpdateSettings(ctx context.Context, id string, 
 		if sessions.options.Created == nil {
 			return errCreatedScope
 		}
-		return sessions.options.Created.UpdateSettings(ctx, id, settings)
+		return sessions.options.Created.UpdateSettings(mutationCtx, id, settings)
 	}
 	state, err := sessions.controlState(ctx, id, owner)
 	if err != nil {
@@ -119,6 +118,14 @@ func (sessions *DesktopSessions) UpdateSettings(ctx context.Context, id string, 
 	if err := codex.ValidateSettings(settings, models, current); err != nil {
 		return err
 	}
+	sessions.f.mu.Lock()
+	entry := sessions.f.entries[id]
+	if entry == nil || entry.owner != owner || entry.err != nil {
+		sessions.f.mu.Unlock()
+		return unavailable()
+	}
+	revision := entry.revision
+	sessions.f.mu.Unlock()
 	result, err := sessions.operation(ctx, id, owner, "thread-follower-update-thread-settings", 1,
 		map[string]any{"threadSettings": settings})
 	if err != nil {
@@ -127,8 +134,7 @@ func (sessions *DesktopSessions) UpdateSettings(ctx context.Context, id string, 
 	if ok, isBool := fields(result)["ok"].(bool); !isBool || !ok {
 		return errors.New(nativeSettingsUnconfirmed)
 	}
-	sessions.f.changed(id)
-	return nil
+	return sessions.waitSettings(ctx, entry, revision, settings)
 }
 
 // Send delivers one input to the original owner: an active turn is steered, an
@@ -136,7 +142,7 @@ func (sessions *DesktopSessions) UpdateSettings(ctx context.Context, id string, 
 // falling back to another execution path.
 func (sessions *DesktopSessions) Send(ctx context.Context, id, value, clientID string) (protocol.SendReceipt, error) {
 	var empty protocol.SendReceipt
-	owner, err := sessions.destination(ctx, id)
+	owner, mutationCtx, err := sessions.mutationDestination(ctx, id)
 	if err != nil {
 		return empty, err
 	}
@@ -144,7 +150,7 @@ func (sessions *DesktopSessions) Send(ctx context.Context, id, value, clientID s
 		if sessions.options.Created == nil {
 			return empty, errCreatedScope
 		}
-		return sessions.options.Created.Send(ctx, id, value, clientID)
+		return sessions.options.Created.Send(mutationCtx, id, value, clientID)
 	}
 	state, err := sessions.controlState(ctx, id, owner)
 	if err != nil {

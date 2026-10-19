@@ -235,10 +235,11 @@ func ProjectDesktop(value any, includeActivity bool, turnLimit float64) (protoco
 		}
 	}
 	return protocol.ConversationPage{
-		Messages:   ordered,
-		NextCursor: nil,
-		Queued:     []protocol.QueuedInput{},
-		Runtime:    runtime,
+		Messages:      ordered,
+		NextCursor:    nil,
+		Queued:        []protocol.QueuedInput{},
+		Runtime:       runtime,
+		InputReceipts: desktopInputReceipts(allTurns),
 	}, nil
 }
 

@@ -51,21 +51,25 @@ type taskAttachment struct {
 // arrive through Receive and Disconnected, because a Go transport has exactly one
 // notification handler and its owner dispatches from it.
 type NativeTaskSession struct {
-	rpc      hostConnection
-	metadata *NativeMetadata
-	mu       sync.Mutex
-	attached map[string]*taskAttachment
-	settings map[string]nativeSessionSettings
-	usage    map[string]taskUsage
-	changed  func(string)
-	closed   func()
+	rpc             hostConnection
+	metadata        *NativeMetadata
+	mu              sync.Mutex
+	attached        map[string]*taskAttachment
+	settings        map[string]nativeSessionSettings
+	usage           map[string]taskUsage
+	receipts        map[string][]protocol.InputReceipt
+	settingsChanged chan struct{}
+	settingsVersion map[string]uint64
+	changed         func(string)
+	closed          func()
 }
 
 // NewNativeTaskSession builds the session bookkeeping of one native connection.
 func NewNativeTaskSession(rpc hostConnection) *NativeTaskSession {
 	return &NativeTaskSession{rpc: rpc, metadata: NewNativeMetadata(rpc),
 		attached: map[string]*taskAttachment{}, settings: map[string]nativeSessionSettings{},
-		usage: map[string]taskUsage{}}
+		usage: map[string]taskUsage{}, receipts: map[string][]protocol.InputReceipt{},
+		settingsChanged: make(chan struct{}), settingsVersion: map[string]uint64{}}
 }
 
 // SetChangedHandler installs the callback that reports the exact task whose
@@ -112,14 +116,28 @@ func (s *NativeTaskSession) Receive(method string, params any) {
 	switch method {
 	case "thread/tokenUsage/updated":
 		s.usage[id] = readTaskUsage(fields["tokenUsage"])
+	case "item/completed":
+		item, _ := nativejson.Fields(fields["item"])
+		if nativejson.Text(item["type"]) == "userMessage" {
+			s.receipts[id] = protocol.MergeInputReceipts(s.receipts[id], []protocol.InputReceipt{{
+				ClientID: nativejson.Text(item["clientId"]), TurnID: nativejson.Text(fields["turnId"]),
+				MessageID: nativejson.Text(item["id"]),
+			}})
+		}
 	case "thread/settings/updated":
 		if threadSettings, isObject := nativejson.Fields(fields["threadSettings"]); isObject {
 			s.settings[id] = readNativeSettings(threadSettings, "effort")
+			s.settingsVersion[id]++
+			close(s.settingsChanged)
+			s.settingsChanged = make(chan struct{})
 		}
 	case "thread/closed":
 		delete(s.attached, id)
 		delete(s.settings, id)
 		delete(s.usage, id)
+		delete(s.receipts, id)
+		close(s.settingsChanged)
+		s.settingsChanged = make(chan struct{})
 	}
 	changed := s.changed
 	s.mu.Unlock()
@@ -134,6 +152,9 @@ func (s *NativeTaskSession) Disconnected() {
 	s.attached = map[string]*taskAttachment{}
 	s.settings = map[string]nativeSessionSettings{}
 	s.usage = map[string]taskUsage{}
+	s.receipts = map[string][]protocol.InputReceipt{}
+	close(s.settingsChanged)
+	s.settingsChanged = make(chan struct{})
 	closed := s.closed
 	s.mu.Unlock()
 	if closed != nil {
@@ -203,6 +224,7 @@ func (s *NativeTaskSession) ArchiveSession(id string) (string, error) {
 	delete(s.attached, id)
 	delete(s.settings, id)
 	delete(s.usage, id)
+	delete(s.receipts, id)
 	changed := s.changed
 	s.mu.Unlock()
 	if changed != nil {
@@ -263,12 +285,16 @@ func (s *NativeTaskSession) Snapshot(threadID string) (NativeTaskSnapshot, error
 	s.mu.Lock()
 	settings, hasSettings := s.settings[threadID]
 	usage, hasUsage := s.usage[threadID]
+	receipts := append([]protocol.InputReceipt(nil), s.receipts[threadID]...)
 	s.mu.Unlock()
-	runtime := protocol.Runtime{Status: status, CompletedTurnID: protocol.Known[*string](nil)}
+	runtime := protocol.Runtime{Status: status}
+	if presentTurn {
+		runtime.CompletedTurnID = protocol.Known[*string](nil)
+	}
 	if status == "active" && turnStatus == "inProgress" {
 		runtime.ActiveTurnID = &turnID
 	}
-	if turnStatus == "completed" {
+	if turnStatus == "completed" || turnStatus == "failed" || turnStatus == "interrupted" {
 		runtime.CompletedTurnID = protocol.Known(&turnID)
 	}
 	if hasSettings && settings.Model != nil {
@@ -292,10 +318,11 @@ func (s *NativeTaskSession) Snapshot(threadID string) (NativeTaskSnapshot, error
 	runtime.ActiveTurnHasUserMessage = protocol.Known(hasUser)
 	snapshot := NativeTaskSnapshot{Materialized: materialized,
 		Page: protocol.ConversationPage{
-			Messages:   []protocol.Message{},
-			NextCursor: nil,
-			Queued:     []protocol.QueuedInput{},
-			Runtime:    &runtime,
+			Messages:      []protocol.Message{},
+			NextCursor:    nil,
+			Queued:        []protocol.QueuedInput{},
+			Runtime:       &runtime,
+			InputReceipts: receipts,
 		}}
 	if presentTurn {
 		snapshot.TurnID = &turnID
@@ -339,7 +366,7 @@ func (s *NativeTaskSession) UpdateSettings(threadID string, settings protocol.Se
 	if settings.ServiceTier.Known {
 		params["serviceTier"] = settings.ServiceTier.Value
 	}
-	if _, err := s.rpc.Request("thread/settings/update", params); err != nil {
+	if err := s.applySettings(threadID, params, settings); err != nil {
 		return err
 	}
 	s.mu.Lock()
@@ -382,11 +409,15 @@ func readNativeSettings(value any, effortKey string) nativeSessionSettings {
 		settings.Effort = &text
 	}
 	if raw, present := fields["serviceTier"]; present {
-		var tier *string
-		if text, ok := raw.(string); ok {
-			tier = &text
+		if raw == nil {
+			settings.ServiceTier = protocol.Known[*string](nil)
+		} else if text, ok := nativejson.AsText(raw); ok {
+			if text == "default" {
+				settings.ServiceTier = protocol.Known[*string](nil)
+			} else {
+				settings.ServiceTier = protocol.Known(&text)
+			}
 		}
-		settings.ServiceTier = protocol.Known(tier)
 	}
 	return settings
 }

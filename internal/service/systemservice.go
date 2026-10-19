@@ -85,13 +85,13 @@ func runSystemService(options systemServiceOptions) int {
 	return 0
 }
 
-// systemServiceReady is the one record a launcher reads from standard output. The
-// field order matches the TypeScript `JSON.stringify` key order.
+// systemServiceReady is the one record a launcher reads from standard output.
 type systemServiceReady struct {
-	Service string `json:"service"`
-	Device  string `json:"device"`
-	Mode    string `json:"mode"`
-	Port    int    `json:"port"`
+	Service string    `json:"service"`
+	Device  string    `json:"device"`
+	Mode    string    `json:"mode"`
+	Port    int       `json:"port"`
+	Build   buildInfo `json:"build"`
 }
 
 // serveSystemService admits one desktop IPC gateway and blocks until it stops. A
@@ -228,6 +228,7 @@ func serveSystemService(options systemServiceOptions) error {
 		Device:  device,
 		Mode:    "desktop-ipc",
 		Port:    port,
+		Build:   currentBuildInfo("gateway"),
 	})
 	signals, cancelSignals := entrySignals()
 	defer cancelSignals()

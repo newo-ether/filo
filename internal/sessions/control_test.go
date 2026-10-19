@@ -27,11 +27,12 @@ type controlRequest struct {
 type controlIPC struct {
 	*ipcFixture
 
-	stateMu    sync.Mutex
-	requests   []controlRequest
-	state      map[string]any
-	dispatch   error
-	connectErr error
+	stateMu         sync.Mutex
+	requests        []controlRequest
+	state           map[string]any
+	dispatch        error
+	settingsApplied func()
+	connectErr      error
 }
 
 func (ipc *controlIPC) Connect(context.Context) error { return ipc.connectErr }
@@ -48,6 +49,10 @@ func (ipc *controlIPC) Request(ctx context.Context, method string, version int, 
 		return nil, dispatch
 	}
 	switch method {
+	case "thread-follower-update-thread-settings":
+		if ipc.settingsApplied != nil {
+			ipc.settingsApplied()
+		}
 	case "thread-follower-start-turn":
 		return desktop.Message{"resultType": "success", "handledByClientId": target,
 			"result": map[string]any{"result": map[string]any{"turn": map[string]any{"id": "new-turn"}}}}, nil
@@ -384,6 +389,14 @@ func TestSettingsValidateNativeCapabilitiesAndNeverAuthorizeFallback(t *testing.
 			!strings.Contains(err.Error(), "Thinking level is unavailable") {
 			t.Fatal("An unsupported thinking level was accepted", err)
 		}
+		f.ipc.settingsApplied = func() {
+			updated := make(map[string]any, len(state))
+			for key, value := range state {
+				updated[key] = value
+			}
+			updated["latestThreadSettings"] = map[string]any{"effort": "low", "serviceTier": "priority"}
+			f.sessions.f.Receive(snapshotOf("thread", "original", 2, updated))
+		}
 		if err := f.sessions.UpdateSettings(context.Background(), "thread", protocol.SessionSettings{
 			Effort: protocol.Known("low"), ServiceTier: protocol.Known(&tier.ID)}); err != nil {
 			t.Fatal(err)
@@ -400,8 +413,8 @@ func TestSettingsValidateNativeCapabilitiesAndNeverAuthorizeFallback(t *testing.
 			t.Fatal(operations[0].params)
 		}
 		again, err := f.sessions.Read(context.Background(), "thread", "", false, nil)
-		if err != nil || again.Runtime.Effort.Value == nil || *again.Runtime.Effort.Value != "ultra" {
-			t.Fatal("An acknowledgement fabricated a readback", again.Runtime)
+		if err != nil || again.Runtime.Effort.Value == nil || *again.Runtime.Effort.Value != "low" {
+			t.Fatal("Confirmed native settings were lost", again.Runtime)
 		}
 		f.ipc.setOwner("")
 		if err := f.sessions.UpdateSettings(context.Background(), "thread",
@@ -538,7 +551,7 @@ func TestOnlyPositivelyCreatedOwnerlessTasksUseScopedControls(t *testing.T) {
 			t.Fatal("An ordinary ownerless task used the created scope", err)
 		}
 		if _, err := f.sessions.Read(context.Background(), "ordinary", "", false, nil); err != nil ||
-			f.history.reads.Load() != reads+1 {
+			f.history.reads.Load() != reads+2 {
 			t.Fatal("Ordinary history was not readable", err)
 		}
 	})
@@ -621,7 +634,7 @@ func TestCatalogReportsScopedStatesWithoutInventingOrdinaryRows(t *testing.T) {
 			page.Statuses[1].Status != nil {
 			t.Fatal(page.Statuses)
 		}
-		want := []string{"statuses created,ordinary"}
+		want := []string{"statuses created"}
 		if entries := created.entries(); !reflect.DeepEqual(entries, want) {
 			t.Fatal(entries)
 		}

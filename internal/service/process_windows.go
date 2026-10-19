@@ -9,8 +9,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// processAlive mirrors `process.kill(pid, 0)`: a live pid is proven by an open
-// process handle, and access denial still proves the process exists.
+// processAlive requires a running process, since an exited Windows process can
+// remain openable while another process retains its handle. Access denial and
+// unreadable exit status stay conservative and cannot authorize a new writer.
 func processAlive(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -19,8 +20,12 @@ func processAlive(pid int) bool {
 	if err != nil {
 		return errors.Is(err, windows.ERROR_ACCESS_DENIED)
 	}
-	_ = windows.CloseHandle(handle)
-	return true
+	defer windows.CloseHandle(handle)
+	var exitCode uint32
+	if err := windows.GetExitCodeProcess(handle, &exitCode); err != nil {
+		return true
+	}
+	return exitCode == 259 // STILL_ACTIVE is not exposed by this x/sys version.
 }
 
 // detachedProcessAttributes keeps the child in an independent process group

@@ -1,4 +1,5 @@
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version 2
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $installer = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'install.ps1'
@@ -75,9 +76,9 @@ try {
     $payload = Join-Path $root $prefix
     New-Item -ItemType Directory -Path (Join-Path $payload 'scripts'),(Join-Path $payload 'tools') | Out-Null
     $capture = Join-Path $root 'forwarded.json'
-    $entryText = 'param([string]$BundleDirectory,[string[]]$Clients,[switch]$ListClients,[switch]$ValidateOnly,[switch]$Uninstall,[int]$Port)' +
+    $entryText = 'param([string]$BundleDirectory,[string[]]$Clients,[switch]$ListClients,[switch]$ValidateOnly,[switch]$Uninstall,[string]$Bind,[int]$Port=7435)' +
         'if($BundleDirectory){throw ''Switch was converted to a positional directory''};' +
-        '[pscustomobject]@{Clients=$Clients;ValidateOnly=[bool]$ValidateOnly;Port=$Port}|ConvertTo-Json|Set-Content -LiteralPath ''' + $capture + ''''
+        '[pscustomobject]@{Clients=$Clients;ListClients=[bool]$ListClients;ValidateOnly=[bool]$ValidateOnly;Uninstall=[bool]$Uninstall;Bind=$Bind;Port=$Port;ExplicitOptions=@($PSBoundParameters.Keys)}|ConvertTo-Json|Set-Content -LiteralPath ''' + $capture + ''''
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\install-entry.ps1') -Destination (Join-Path $payload 'Install-Filo.ps1')
     [IO.File]::WriteAllText((Join-Path $payload 'scripts/install.ps1'),$entryText)
     foreach ($relative in @('tools/filo.exe','tools/nssm.exe','tools/FiloBackground.exe')) {
@@ -104,9 +105,12 @@ try {
     $expanded = Expand-FiloRelease $goodZip (Join-Path $root 'expanded')
     Assert-FiloReleaseContents $expanded | Out-Null
     $goodHash = (Get-FileHash -LiteralPath $goodZip).Hash
+    $global:FiloBootstrapStages = [Collections.Generic.List[string]]::new()
     $mock = @'
 function Receive-FiloReleaseFile {
     param([uri]$Url,[string]$Destination,[long]$MaximumBytes)
+    if ($ProgressPreference -ne 'SilentlyContinue') { throw 'Bootstrap progress can block native remoting' }
+    $global:FiloBootstrapStages.Add((Split-Path -Parent $Destination))
     if ($Url.AbsolutePath.EndsWith('/latest')) {
         '{"tag_name":"v0.1.0"}' | Set-Content -LiteralPath $Destination
     } elseif ($Url.AbsolutePath.EndsWith('/checksums.txt')) {
@@ -118,17 +122,50 @@ function Receive-FiloReleaseFile {
     $source = [IO.File]::ReadAllText($installer)
     $main = $source.LastIndexOf('& {')
     $testScript = $source.Insert($main,$mock + [Environment]::NewLine)
-    & ([scriptblock]::Create($testScript)) -ValidateOnly -Clients 'codex:fixture' -Port 8888
+    $originalProtocol = [Net.ServicePointManager]::SecurityProtocol
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
+        $callerProtocol = [Net.ServicePointManager]::SecurityProtocol
+        & ([scriptblock]::Create($testScript)) -ValidateOnly -Clients 'codex:fixture' -Port 8888
+        if ([Net.ServicePointManager]::SecurityProtocol -ne $callerProtocol) { throw 'Bootstrap changed the caller TLS configuration' }
+    } finally { [Net.ServicePointManager]::SecurityProtocol = $originalProtocol }
     $received = Get-Content -LiteralPath $capture -Raw | ConvertFrom-Json
     if (-not $received.ValidateOnly -or $received.Clients[0] -ne 'codex:fixture' -or $received.Port -ne 8888) {
         throw 'Bootstrap did not forward explicit installer options'
     }
     Remove-Item -LiteralPath $capture
     $badHashScript = $testScript.Replace($goodHash,('0' * 64))
-    Assert-Throws { & ([scriptblock]::Create($badHashScript)) -ValidateOnly -Clients 'codex:fixture' } 'SHA-256 mismatch'
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
+        $callerProtocol = [Net.ServicePointManager]::SecurityProtocol
+        Assert-Throws { & ([scriptblock]::Create($badHashScript)) -ValidateOnly -Clients 'codex:fixture' } 'SHA-256 mismatch'
+        if ([Net.ServicePointManager]::SecurityProtocol -ne $callerProtocol) { throw 'Failed bootstrap changed the caller TLS configuration' }
+    } finally { [Net.ServicePointManager]::SecurityProtocol = $originalProtocol }
     if (Test-Path -LiteralPath $capture) { throw 'Rejected download executed its installer' }
-    Write-Host 'Release bootstrap verification passed: URLs, checksums, traversal, duplicates, links, manifest, forwarding and fail-before-execute.'
+    foreach ($ids in @(@(),@(''),@(' '))) {
+        Assert-Throws { & ([scriptblock]::Create($testScript)) -ValidateOnly -Clients $ids } 'non-empty client ID'
+    }
+    # Exercise the actual no-argument command-string path used by irm | iex.
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $admin = ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if ($admin) {
+        $callerProgress = $ProgressPreference
+        try {
+            $ProgressPreference = 'Continue'
+            $testScript | Invoke-Expression
+            if ($ProgressPreference -ne 'Continue') { throw 'IEX bootstrap changed caller progress preference' }
+        } finally { $ProgressPreference = $callerProgress }
+        $received = Get-Content -LiteralPath $capture -Raw | ConvertFrom-Json
+        if ($received.ValidateOnly -or $received.Port -ne 7435) { throw 'No-argument IEX did not use installer defaults' }
+    } else {
+        Assert-Throws { $testScript | Invoke-Expression } 'as administrator'
+    }
+    foreach ($stage in $global:FiloBootstrapStages | Select-Object -Unique) {
+        if (Test-Path -LiteralPath $stage) { throw 'Bootstrap left a temporary download directory after completion/failure' }
+    }
+    Write-Host 'Release bootstrap verification passed: URLs, checksums, traversal, duplicates, links, manifest, forwarding, empty clients, IEX, TLS restoration and cleanup.'
 } finally {
+    Remove-Variable FiloBootstrapStages -Scope Global -ErrorAction SilentlyContinue
     $resolved = [IO.Path]::GetFullPath($root)
     $temp = [IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
     if (-not $resolved.StartsWith($temp,[StringComparison]::OrdinalIgnoreCase) -or

@@ -110,13 +110,22 @@ type Runtime struct {
 	ServiceTier              Optional[*string] `json:"serviceTier,omitzero"`
 }
 
+// InputReceipt proves a native user item independently of the visible page.
+// Producers retain at most 128 receipts, unique by nonblank client identity.
+type InputReceipt struct {
+	ClientID  string `json:"clientId"`
+	TurnID    string `json:"turnId"`
+	MessageID string `json:"messageId"`
+}
+
 type ConversationPage struct {
-	PageCursor Optional[string] `json:"pageCursor,omitzero"`
-	Nodes      []MessageNode    `json:"nodes,omitempty"`
-	Messages   []Message        `json:"messages"`
-	NextCursor *string          `json:"nextCursor"`
-	Queued     []QueuedInput    `json:"queued"`
-	Runtime    *Runtime         `json:"runtime,omitempty"`
+	PageCursor    Optional[string] `json:"pageCursor,omitzero"`
+	Nodes         []MessageNode    `json:"nodes,omitempty"`
+	Messages      []Message        `json:"messages"`
+	NextCursor    *string          `json:"nextCursor"`
+	Queued        []QueuedInput    `json:"queued"`
+	Runtime       *Runtime         `json:"runtime,omitempty"`
+	InputReceipts []InputReceipt   `json:"inputReceipts,omitempty"`
 }
 
 // TopologyPage is a ConversationPage stripped of message bodies and the page
@@ -124,10 +133,11 @@ type ConversationPage struct {
 // Mirrors the TS type Omit<ConversationPage, 'messages' | 'pageCursor'> &
 // { nodes: MessageNode[] }; payloads stay on the recoverable payload cache.
 type TopologyPage struct {
-	Nodes      []MessageNode `json:"nodes"`
-	NextCursor *string       `json:"nextCursor"`
-	Queued     []QueuedInput `json:"queued"`
-	Runtime    *Runtime      `json:"runtime,omitempty"`
+	Nodes         []MessageNode  `json:"nodes"`
+	NextCursor    *string        `json:"nextCursor"`
+	Queued        []QueuedInput  `json:"queued"`
+	Runtime       *Runtime       `json:"runtime,omitempty"`
+	InputReceipts []InputReceipt `json:"inputReceipts,omitempty"`
 }
 
 type ServiceTier struct {

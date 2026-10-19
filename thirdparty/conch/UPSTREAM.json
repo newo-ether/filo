@@ -1,5 +1,8 @@
 {
     "revision":  "f7edc900b2365f2c337b0bda8528d5193ac35bbd",
+    "revisionState":  "base snapshot with upstream working-tree update; immutable revision pending",
+    "workingTreeBaseRevision":  "8c7b4d6a1e33e208dd68f4ce641a4e664321803c",
+    "uncommittedFiles":  ["encryptedhttp/client_body.go", "encryptedhttp/gateway.go"],
     "files":  [
                   {
                       "path":  "go.mod",
@@ -55,11 +58,11 @@
                   },
                   {
                       "path":  "encryptedhttp/client_body.go",
-                      "sha256":  "933599b2e7c42133f1bf4f272cf6b730d3b69251bc483b4bd3097519209ff842"
+                      "sha256":  "7ffca67d2d23746439ffd8bee3acf957b6167bfe522c1009a2fe76ce8b0ca601"
                   },
                   {
                       "path":  "encryptedhttp/gateway.go",
-                      "sha256":  "844585be69b734698e14798bb6f720105fddd067df25fdd246fd6733c0387e98"
+                      "sha256":  "a3f64b1184bf2fc554f4d4fc72de68538610eb5a791f3c825341aa3b351b6f05"
                   }
               ]
 }

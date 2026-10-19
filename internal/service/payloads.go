@@ -161,10 +161,11 @@ func (p *ConversationPayloads) Topology(ctx context.Context, source Conversation
 		nodes = append(nodes, p.remember(session, message, nil))
 	}
 	return protocol.TopologyPage{
-		Nodes:      nodes,
-		NextCursor: page.NextCursor,
-		Queued:     page.Queued,
-		Runtime:    page.Runtime,
+		Nodes:         nodes,
+		NextCursor:    page.NextCursor,
+		Queued:        page.Queued,
+		Runtime:       page.Runtime,
+		InputReceipts: page.InputReceipts,
 	}, nil
 }
 

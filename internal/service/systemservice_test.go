@@ -1,7 +1,7 @@
 package service
 
 import (
-	"github.com/newo-ether/conch/encryptedhttp"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/newo-ether/conch/encryptedhttp"
 )
 
 // The desktop IPC gateway is the service the original desktop launches as one
@@ -114,9 +116,17 @@ func TestSystemServiceGatewayStaysReachableWithoutTheOriginalDesktop(t *testing.
 	if err != nil {
 		t.Fatalf("os.Hostname: %v", err)
 	}
-	ready := `{"service":"Filo","device":"` + hostname + `","mode":"desktop-ipc","port":` + strconv.Itoa(port) + "}\n"
-	if output.String() != ready {
+	var ready map[string]any
+	if err := json.Unmarshal([]byte(output.String()), &ready); err != nil {
+		t.Fatalf("ready record = %q: %v", output.String(), err)
+	}
+	if ready["service"] != "Filo" || ready["device"] != hostname || ready["mode"] != "desktop-ipc" || ready["port"] != float64(port) {
 		t.Fatalf("ready record = %q", output.String())
+	}
+	assertBuildIdentity(t, ready["build"], "gateway")
+	assertBuildIdentity(t, info["build"], "gateway")
+	if strings.Contains(output.String(), testToken) {
+		t.Fatal("readiness disclosed the token")
 	}
 }
 

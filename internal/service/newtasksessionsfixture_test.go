@@ -128,11 +128,19 @@ func (peer *taskSessionsNative) answer(method string, params map[string]any) (an
 		return state, nil
 	case "model/list":
 		return map[string]any{"data": []any{map[string]any{"model": "m", "displayName": "M",
-			"isDefault": true, "supportedReasoningEfforts": []any{
+			"isDefault": true, "serviceTiers": []any{map[string]any{"id": "priority", "name": "Priority"}},
+			"supportedReasoningEfforts": []any{
 				map[string]any{"reasoningEffort": "low"},
 				map[string]any{"reasoningEffort": "high"},
 			}}}}, nil
 	case "thread/settings/update":
+		values := map[string]any{"model": "m", "effort": "high", "serviceTier": nil}
+		for _, key := range []string{"model", "effort", "serviceTier"} {
+			if value, exists := params[key]; exists {
+				values[key] = value
+			}
+		}
+		peer.notify("thread/settings/updated", map[string]any{"threadId": params["threadId"], "threadSettings": values})
 		return map[string]any{}, nil
 	case "turn/start":
 		peer.mu.Lock()

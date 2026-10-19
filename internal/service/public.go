@@ -10,7 +10,11 @@ type PublicServer struct {
 	channel http.Handler
 }
 
-func (s *PublicServer) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.channel.ServeHTTP(w, r) }
+func (s *PublicServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	bounded := newDeadlineResponseWriter(w, responseWriteTimeout)
+	defer bounded.finish()
+	s.channel.ServeHTTP(bounded, r)
+}
 
 // NewPublicServer is the only supported public network entry point. Private
 // loopback executor links retain their separate authentication and lifecycle.

@@ -435,8 +435,8 @@ func TestTaskExecutorFactoryBoundsCapacityAndNeverFallsThrough(t *testing.T) {
 	if _, err := factory.Open(context.Background(), &id); err == nil || !strings.Contains(err.Error(), "not ready") {
 		t.Fatalf("opening a disconnected executor = %v", err)
 	}
-	if _, err := factory.Follow(context.Background(), id); err == nil || !strings.Contains(err.Error(), "not ready") {
-		t.Fatalf("following a disconnected executor = %v", err)
+	if connection, err := factory.Follow(context.Background(), id); connection != nil || err != nil {
+		t.Fatalf("read-only history fallback for a disconnected executor = %v, %v", connection, err)
 	}
 	if count := f.runningCount(); count != 1 {
 		t.Fatalf("the factory launched %d native executors", count)

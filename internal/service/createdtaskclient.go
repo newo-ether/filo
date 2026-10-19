@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"net/http"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/newo-ether/filo/internal/protocol"
 )
@@ -52,11 +51,17 @@ type CreatedTaskClient struct {
 // readiness gate and the last page or terminal failure it observed.
 type taskSubscription struct {
 	cancel   context.CancelFunc
-	refs     int
+	refs     *taskSubscriptionRefs
 	ready    chan struct{}
 	readyErr error
 	page     *protocol.ConversationPage
 	err      error
+}
+
+// taskSubscriptionRefs survives stream replacement so cancelled attaches release
+// their own reference even if a reader has already replaced the failed stream.
+type taskSubscriptionRefs struct {
+	count int
 }
 
 // NewCreatedTaskClient builds the private transport of one executor directory.
@@ -78,20 +83,7 @@ func (c *CreatedTaskClient) Owns(id string) (bool, error) {
 	if err := c.live(); err != nil {
 		return false, err
 	}
-	if !taskIDPattern.MatchString(id) {
-		return false, nil
-	}
-	value, err := ReadExecutorFile(filepath.Join(c.directory, "tasks", id), executorOriginName)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return false, nil
-		}
-		return false, err
-	}
-	if _, err := ExecutorReference(value); err != nil {
-		return false, err
-	}
-	return true, nil
+	return taskScope(c.directory, id, true)
 }
 
 // live rejects every operation of a closed transport.
@@ -131,18 +123,24 @@ func (c *CreatedTaskClient) Read(ctx context.Context, id string, cursor *string,
 		cursor = nil
 	}
 	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil, errors.New("Filo task client is closed")
+	}
 	subscription := c.subscriptions[id]
+	recovering := subscription != nil && subscription.err != nil
+	if recovering {
+		subscription = c.replaceTaskSubscription(id, subscription.refs)
+	}
 	var cached *protocol.ConversationPage
-	var subscriptionErr error
-	if subscription != nil {
-		subscriptionErr = subscription.err
-		if cursor == nil && activity {
-			cached = subscription.page
-		}
+	if subscription != nil && !recovering && cursor == nil && activity {
+		cached = subscription.page
 	}
 	c.mu.Unlock()
-	if subscriptionErr != nil {
-		return nil, subscriptionErr
+	if recovering {
+		if err := awaitTaskReady(ctx, subscription); err != nil {
+			return nil, err
+		}
 	}
 	if cached != nil {
 		return cached, nil
@@ -194,31 +192,57 @@ func (c *CreatedTaskClient) Attach(ctx context.Context, id string) error {
 		return err
 	}
 	c.mu.Lock()
-	if existing := c.subscriptions[id]; existing != nil {
-		existing.refs++
+	if c.closed {
 		c.mu.Unlock()
-		return awaitTaskReady(ctx, existing)
+		return errors.New("Filo task client is closed")
 	}
-	if len(c.subscriptions) >= taskClientSubscriptions {
-		c.mu.Unlock()
-		return errors.New("Too many task subscriptions")
+	subscription := c.subscriptions[id]
+	if subscription != nil {
+		subscription.refs.count++
+		if subscription.err != nil {
+			subscription = c.replaceTaskSubscription(id, subscription.refs)
+		}
+	} else {
+		if len(c.subscriptions) >= taskClientSubscriptions {
+			c.mu.Unlock()
+			return errors.New("Too many task subscriptions")
+		}
+		subscription = c.replaceTaskSubscription(id, &taskSubscriptionRefs{count: 1})
+	}
+	c.mu.Unlock()
+	if err := awaitTaskReady(ctx, subscription); err != nil {
+		c.releaseTaskReference(id, subscription.refs)
+		return err
+	}
+	return nil
+}
+
+// replaceTaskSubscription starts at most one replacement while the lock is held.
+// It transfers attachment ownership and cancels the previous reader. Failed opens
+// retain existing references for a later read; no native mutation is replayed.
+func (c *CreatedTaskClient) replaceTaskSubscription(id string, refs *taskSubscriptionRefs) *taskSubscription {
+	if previous := c.subscriptions[id]; previous != nil {
+		previous.cancel()
 	}
 	streamContext, cancel := context.WithCancel(context.Background())
-	subscription := &taskSubscription{cancel: cancel, refs: 1, ready: make(chan struct{})}
+	subscription := &taskSubscription{cancel: cancel, refs: refs, ready: make(chan struct{})}
 	c.subscriptions[id] = subscription
-	c.mu.Unlock()
 	go c.openTaskSubscription(streamContext, id, subscription)
-	return awaitTaskReady(ctx, subscription)
+	return subscription
 }
 
 // Detach releases one subscription. The stream ends with its last subscriber.
 func (c *CreatedTaskClient) Detach(id string) {
+	c.releaseTaskReference(id, nil)
+}
+
+func (c *CreatedTaskClient) releaseTaskReference(id string, refs *taskSubscriptionRefs) {
 	c.mu.Lock()
 	subscription := c.subscriptions[id]
 	released := false
-	if subscription != nil {
-		subscription.refs--
-		if subscription.refs <= 0 {
+	if subscription != nil && (refs == nil || refs == subscription.refs) {
+		subscription.refs.count--
+		if subscription.refs.count <= 0 {
 			delete(c.subscriptions, id)
 			released = true
 		}
@@ -232,7 +256,7 @@ func (c *CreatedTaskClient) Detach(id string) {
 // Send submits one message and requires the native acknowledgement to name the
 // same client, so an unconfirmed send is never reported as accepted.
 func (c *CreatedTaskClient) Send(ctx context.Context, id, text, clientID string) (protocol.SendReceipt, error) {
-	if err := c.admit(id); err != nil {
+	if err := c.admitMutation(ctx, id); err != nil {
 		return protocol.SendReceipt{}, err
 	}
 	raw, err := c.call(ctx, "/v1/sessions/"+id+"/messages",
@@ -251,7 +275,7 @@ func (c *CreatedTaskClient) Send(ctx context.Context, id, text, clientID string)
 // acknowledgement.
 func (c *CreatedTaskClient) UpdateSettings(ctx context.Context, id string,
 	settings protocol.SessionSettings) error {
-	if err := c.admit(id); err != nil {
+	if err := c.admitMutation(ctx, id); err != nil {
 		return err
 	}
 	raw, err := c.call(ctx, "/v1/sessions/"+id+"/settings", settings)
@@ -296,14 +320,22 @@ func (c *CreatedTaskClient) Close() {
 	}
 }
 
-// openTaskSubscription opens one stream and publishes its readiness. A stream
-// that cannot be opened is removed again before the attach reports it, so a
-// failed subscription never occupies a slot.
+// openTaskSubscription opens one bounded attempt and publishes its readiness.
+// An initial refused attach releases its reference; a failed recovery retains
+// the references belonging to earlier successful attachments.
 func (c *CreatedTaskClient) openTaskSubscription(streamContext context.Context, id string,
 	subscription *taskSubscription) {
+	opening := time.AfterFunc(10*time.Second, subscription.cancel)
 	response, err := c.openStream(streamContext, "/v1/sessions/"+id+"/events")
+	if !opening.Stop() {
+		// Make expiry visible before publishing readiness even if the timer's
+		// cancellation callback has not yet been scheduled.
+		subscription.cancel()
+	}
 	if err == nil {
 		switch {
+		case response == nil || response.Body == nil:
+			err = errors.New("Filo task stream is unavailable")
 		case streamContext.Err() != nil:
 			_ = response.Body.Close()
 			err = errors.New("Task subscription cancelled")
@@ -313,18 +345,28 @@ func (c *CreatedTaskClient) openTaskSubscription(streamContext context.Context, 
 		}
 	}
 	if err != nil {
+		cancelTaskEventResponse(response)
 		c.mu.Lock()
-		if c.subscriptions[id] == subscription {
-			delete(c.subscriptions, id)
-		}
 		subscription.readyErr = err
+		subscription.err = err
 		c.mu.Unlock()
 		subscription.cancel()
 		close(subscription.ready)
 		return
 	}
+	c.mu.Lock()
+	current := !c.closed && c.subscriptions[id] == subscription && streamContext.Err() == nil
+	c.mu.Unlock()
+	if !current {
+		_ = response.Body.Close()
+		subscription.readyErr = errors.New("Task subscription cancelled")
+		close(subscription.ready)
+		return
+	}
 	close(subscription.ready)
-	go c.readTaskSubscription(streamContext, id, subscription, response)
+	stopClosing := context.AfterFunc(streamContext, func() { _ = response.Body.Close() })
+	defer stopClosing()
+	c.readTaskSubscription(streamContext, id, subscription, response)
 }
 
 // readTaskSubscription publishes every page of one stream and records a terminal
@@ -337,6 +379,10 @@ func (c *CreatedTaskClient) readTaskSubscription(streamContext context.Context, 
 			return err
 		}
 		c.mu.Lock()
+		if c.closed || c.subscriptions[id] != subscription || streamContext.Err() != nil {
+			c.mu.Unlock()
+			return context.Canceled
+		}
 		subscription.page = page
 		c.mu.Unlock()
 		c.notify(id)
@@ -346,6 +392,10 @@ func (c *CreatedTaskClient) readTaskSubscription(streamContext context.Context, 
 		return
 	}
 	c.mu.Lock()
+	if c.closed || c.subscriptions[id] != subscription || streamContext.Err() != nil {
+		c.mu.Unlock()
+		return
+	}
 	subscription.page = nil
 	subscription.err = err
 	c.mu.Unlock()

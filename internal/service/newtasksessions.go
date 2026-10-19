@@ -9,6 +9,7 @@ import (
 	"github.com/newo-ether/filo/internal/history"
 	"github.com/newo-ether/filo/internal/nativejson"
 	"github.com/newo-ether/filo/internal/protocol"
+	"github.com/newo-ether/filo/internal/sessions"
 )
 
 const (
@@ -197,70 +198,6 @@ func (s *TaskSessions) Models(context.Context) ([]protocol.Model, error) {
 	return s.metadata.Models()
 }
 
-// Statuses reads the runtime state of at most thirty listed tasks. A status read
-// never allocates a writer and never hydrates history: an already admitted
-// connection answers from its own snapshot, every other task falls back to the
-// read-only catalog, and any failure reports the unknown status instead.
-func (s *TaskSessions) Statuses(ctx context.Context, ids []string) ([]protocol.SessionStatus, error) {
-	if len(ids) > taskSessionsListedBound {
-		return nil, errors.New("At most 30 listed sessions")
-	}
-	statuses := make([]protocol.SessionStatus, 0, len(ids))
-	for _, id := range ids {
-		statuses = append(statuses, s.status(ctx, id))
-	}
-	return statuses, nil
-}
-
-// status resolves one listed task. A task this helper does not own, and every
-// read that fails, report the unknown status rather than an invented one.
-//
-// Divergence from the TypeScript `Promise.all`: the ids are resolved in order,
-// because concurrent snapshots of one connection cannot observe a different state.
-func (s *TaskSessions) status(ctx context.Context, id string) protocol.SessionStatus {
-	unknown := protocol.SessionStatus{ID: id}
-	owned, err := s.factory.Owns(id)
-	if err != nil || !owned {
-		return unknown
-	}
-	entry, err := s.acquire(ctx, id, false)
-	if err != nil {
-		return unknown
-	}
-	var runtime *protocol.Runtime
-	if entry != nil {
-		snapshot, err := entry.sessions.Snapshot(id)
-		if err != nil {
-			return unknown
-		}
-		runtime = snapshot.Page.Runtime
-	} else {
-		page, err := s.history.Read(ctx, id, "", false, nil)
-		if err != nil {
-			return unknown
-		}
-		runtime = page.Runtime
-	}
-	if runtime == nil {
-		return unknown
-	}
-	unknown.Status = listedStatus(runtime.Status)
-	unknown.ActiveTurnID = runtime.ActiveTurnID
-	if runtime.CompletedTurnID.Known {
-		unknown.CompletedTurnID = runtime.CompletedTurnID.Value
-	}
-	return unknown
-}
-
-// listedStatus keeps only the three statuses a listed task may report.
-func listedStatus(status string) *string {
-	switch status {
-	case "active", "idle", "ready":
-		return &status
-	}
-	return nil
-}
-
 // Create starts one native task on a brand new admitted connection, applies the
 // optional drafted settings, and runs its first turn in the same mutation, so a
 // created task is never left empty and never has a window where it is
@@ -335,9 +272,7 @@ func (s *TaskSessions) Create(ctx context.Context, text, clientID string,
 		// native task was created, so the thread is materialized before this
 		// mutation returns and no empty, unpersisted window remains.
 		input := []any{map[string]any{"type": "text", "text": protocol.Text(text), "text_elements": []any{}}}
-		value, err := entry.connection.Transport().Request("turn/start", map[string]any{
-			"threadId": session.ID, "input": input, "clientUserMessageId": clientID,
-		})
+		value, err := entry.sessions.StartTurn(session.ID, input, clientID)
 		if err != nil {
 			return err
 		}
@@ -398,7 +333,7 @@ func (s *TaskSessions) Read(ctx context.Context, id, cursor string, activity boo
 		}
 		page = snapshot.Page
 	}
-	page.Runtime = snapshot.Page.Runtime
+	mergeTaskMetadata(&page, snapshot.Page)
 	currentTurn := snapshot.TurnID
 	if cursor != "" || (currentTurn != nil && containsTurn(excludedTurns, *currentTurn)) {
 		return page, nil
@@ -455,9 +390,7 @@ func (s *TaskSessions) Send(ctx context.Context, id, text, clientID string) (pro
 		if runtime.Status != "idle" {
 			return notReady()
 		}
-		value, err := entry.connection.Transport().Request("turn/start", map[string]any{
-			"threadId": id, "input": input, "clientUserMessageId": clientID,
-		})
+		value, err := entry.sessions.StartTurn(id, input, clientID)
 		if err != nil {
 			return err
 		}
@@ -722,6 +655,15 @@ func (s *TaskSessions) open(ctx context.Context, id string, write bool) (*taskSe
 	var connection TaskSessionsConnection
 	var err error
 	if write {
+		if sessions.IdleRecoveryAllowed(ctx, id) {
+			page, readErr := s.history.Read(ctx, id, "", false, nil)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if !sessions.RecoverableRuntime(page.Runtime) {
+				return nil, notReady()
+			}
+		}
 		connection, err = s.factory.Open(ctx, &id)
 	} else {
 		connection, err = s.factory.Follow(ctx, id)

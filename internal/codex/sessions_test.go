@@ -103,6 +103,9 @@ func TestNativeTaskSessionCreationInheritsHostDefaultsAndSettingsNeverStartATurn
 		"id": "new", "cwd": "/host", "updatedAt": 1.0, "preview": ""}})
 	host.replies["model/list"] = sessionReply(map[string]any{"data": []any{map[string]any{
 		"model": "model", "displayName": "Model", "isDefault": true}}})
+	host.replies["thread/settings/update"] = func(params map[string]any) (any, error) {
+		return map[string]any{"threadId": params["threadId"], "threadSettings": map[string]any{"model": params["model"]}}, nil
+	}
 	sessions := NewNativeTaskSession(host)
 	session, err := sessions.Create()
 	if err != nil {

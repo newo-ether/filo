@@ -17,6 +17,12 @@ param(
     [ValidateRange(1024,65535)][int]$Port = 7435
 )
 $ErrorActionPreference='Stop'
+# Native remoting transports may serialize progress into a blocking stderr pipe.
+$ProgressPreference='SilentlyContinue'
+if ($PSBoundParameters.ContainsKey('Clients') -and
+    (-not $Clients -or @($Clients | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count)) {
+    throw 'Clients must contain at least one non-empty client ID. Use -ListClients to discover IDs.'
+}
 if ($ValidateOnly -and $Uninstall) { throw 'ValidateOnly cannot be combined with Uninstall; no resources changed' }
 if (-not $BundleDirectory) { $BundleDirectory=Split-Path -Parent $PSScriptRoot }
 . (Join-Path $PSScriptRoot 'windows\Client-Selection.ps1')
@@ -37,20 +43,20 @@ if (-not $ValidateOnly -and -not $admin) {
     throw 'Run the Filo installer as administrator; discovery and bundle/client validation do not need elevation'
 }
 $state=$null; $existing=$null
-if ($admin) {
-    $state=Assert-FiloPrivatePath (Join-Path $root 'service') $root
-    $configPath=Join-Path $state 'config.json'
-    $existing=if (Test-Path -LiteralPath $configPath) { Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json } else { $null }
-}
 $wrapper=Join-Path $root 'nssm.exe'
 $mutex=$null; $ownsMutex=$false
-if (-not $ValidateOnly) {
-    if (-not $admin) { throw 'Run the Filo installer as administrator; discovery and validation do not need elevation' }
+if ($admin) {
     $mutex=[Threading.Mutex]::new($false,'Global\Filo.Install')
     try { $ownsMutex=$mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsMutex=$true }
     if (-not $ownsMutex) { $mutex.Dispose(); throw 'Another Filo installation is already running' }
 }
 try {
+if ($admin) {
+    # Read installed identity and endpoints only while holding the installation lock.
+    $state=Assert-FiloPrivatePath (Join-Path $root 'service') $root
+    $configPath=Join-Path $state 'config.json'
+    $existing=if (Test-Path -LiteralPath $configPath) { Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json } else { $null }
+}
 
 if ($Uninstall) {
     if (-not $admin) { throw 'Run the Filo installer as administrator' }

@@ -3,6 +3,7 @@ package codex
 import (
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/newo-ether/filo/internal/nativejson"
@@ -106,6 +107,38 @@ func TestTaskActivityBridgesTheCompletedTailWithoutPrependingOldBlocks(t *testin
 	}
 }
 
+func TestTaskActivityKeepsSteeringInputAfterEarlierLiveBlocks(t *testing.T) {
+	for _, method := range []string{"item/agentMessage/delta", "item/reasoning/summaryTextDelta"} {
+		t.Run(method, func(t *testing.T) {
+			live, event := taskActivityFixture()
+			user := func(id string) map[string]any {
+				return map[string]any{"id": id, "type": "userMessage", "content": []any{
+					map[string]any{"type": "text", "text": id},
+				}}
+			}
+			event("item/completed", map[string]any{"item": user("first-user")})
+			event(method, map[string]any{"itemId": "earlier-live", "delta": "before steer"})
+			event("item/completed", map[string]any{"item": user("steering-user")})
+			event("item/agentMessage/delta", map[string]any{"itemId": "later-live", "delta": "after steer"})
+			persisted := []protocol.Message{taskActivityMessage("first-user"), taskActivityMessage("steering-user")}
+			for index := range persisted {
+				persisted[index].Role = "user"
+			}
+			// Native history can publish accepted input while an earlier response
+			// or reasoning block still exists only in the live stream.
+			page := live.Merge(persisted, pointer("turn"), true, false)
+			want := []string{"first-user", "earlier-live", "steering-user", "later-live"}
+			if got := taskActivityIDs(page); !reflect.DeepEqual(got, want) {
+				t.Fatalf("input moved before earlier live activity: got %v, want %v", got, want)
+			}
+			// Once history catches up, the same native order must remain visible.
+			if got := taskActivityIDs(live.Merge(page, pointer("turn"), true, true)); !reflect.DeepEqual(got, want) {
+				t.Fatalf("persisted catch-up changed input order: got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestTaskActivityKeepsReasoningParagraphsAndTheActivityOptIn(t *testing.T) {
 	live, event := taskActivityFixture()
 	event("item/reasoning/summaryTextDelta", map[string]any{"itemId": "r", "summaryIndex": 0.0, "delta": "First"})
@@ -185,6 +218,73 @@ func TestTaskActivityAcceptsTransportDecodedPayloads(t *testing.T) {
 	}
 	if duration := merged[2].Activity.DurationMs; !duration.Known || duration.Value != 250 {
 		t.Fatalf("the reasoning duration = %+v", merged[2].Activity.DurationMs)
+	}
+}
+
+func TestTaskActivitySnapshotsDoNotExposeRetainedOrPersistedPayloads(t *testing.T) {
+	live, event := taskActivityFixture()
+	event("item/completed", map[string]any{"item": map[string]any{
+		"id": "user", "type": "userMessage", "clientId": "original", "content": []any{},
+	}})
+	event("item/reasoning/summaryTextDelta", map[string]any{"itemId": "thought", "delta": "reasoning"})
+	first := live.Merge(nil, pointer("turn"), true, false)
+	*first[0].ClientID = "changed"
+	first[1].Activity.Type = "changed"
+	first[1].Text = "changed"
+	second := live.Merge(nil, pointer("turn"), true, false)
+	if *second[0].ClientID != "original" || second[1].Activity.Type != "thought" || second[1].Text != "reasoning" {
+		t.Fatalf("a returned page mutated live state: %+v", second)
+	}
+	persisted := []protocol.Message{{MessageIdentity: protocol.MessageIdentity{ID: "persisted", ClientID: pointer("client")},
+		ImageLinks: []string{"image"}, Activity: &protocol.Activity{Type: "tool"}}}
+	for _, turn := range []*string{nil, pointer("turn")} {
+		page := live.Merge(persisted, turn, true, false)
+		*page[0].ClientID = "changed"
+		page[0].ImageLinks[0] = "changed"
+		page[0].Activity.Type = "changed"
+		page[0].ID = "changed"
+		if *persisted[0].ClientID != "client" || persisted[0].ImageLinks[0] != "image" ||
+			persisted[0].Activity.Type != "tool" || persisted[0].ID != "persisted" {
+			t.Fatalf("a returned page mutated persisted input: %+v", persisted)
+		}
+	}
+}
+
+func TestTaskActivityConcurrentReceiveAndMerge(t *testing.T) {
+	live, event := taskActivityFixture()
+	const iterations = 500
+	var workers sync.WaitGroup
+	start := make(chan struct{})
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		<-start
+		for index := 0; index < iterations; index++ {
+			event("item/reasoning/summaryTextDelta", map[string]any{"itemId": "thought", "delta": "x"})
+			event("item/agentMessage/delta", map[string]any{"itemId": "answer", "delta": "x"})
+		}
+	}()
+	for reader := 0; reader < 4; reader++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			for index := 0; index < iterations; index++ {
+				page := live.Merge(nil, pointer("turn"), true, false)
+				for _, message := range page {
+					if message.Activity != nil {
+						message.Activity.Type = "reader-owned"
+					}
+				}
+			}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	page := live.Merge(nil, pointer("turn"), true, false)
+	if len(page) != 2 || page[0].Activity.Type != "thought" ||
+		len(page[0].Text) != iterations || len(page[1].Text) != iterations {
+		t.Fatalf("concurrent projection lost or exposed state: %+v", page)
 	}
 }
 

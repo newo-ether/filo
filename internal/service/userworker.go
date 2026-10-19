@@ -204,6 +204,7 @@ func (worker *UserWorker) call(ctx context.Context, path string, input any) (jso
 		return nil, err
 	}
 	request.Header.Set("Authorization", authorization)
+	writeIdleRecoveryHeader(request, ctx)
 	if path == "/v1/sessions" {
 		if trace := createTraceID(ctx); createTracePattern.MatchString(trace) {
 			request.Header.Set(createTraceHeader, trace)
