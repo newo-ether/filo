@@ -19,6 +19,10 @@ published release, download its Windows bundle and checksums, verify SHA-256, th
 open the existing client checkbox selector. No source checkout, Go, Node.js, separate
 Codex CLI or manual ZIP extraction is required. The bundle includes NSSM.
 Run the same command to upgrade; existing credentials and rollback semantics remain.
+Latest resolution uses GitHub's official release redirect, without an API token or
+anonymous API quota. Once resolved, both checksums and the ZIP use that exact version,
+so a concurrent release cannot mix assets from different versions. Temporary lookup
+or download failures are retried before installation starts.
 
 HTTPS authenticates the release source; checksums detect damaged or mismatched assets.
 They are not an independent publisher signature. Downloads and ZIP expansion have

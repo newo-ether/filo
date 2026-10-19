@@ -34,6 +34,41 @@ function Assert-FiloDownloadUrl {
     }
 }
 
+function Get-FiloReleaseResponse {
+    param([uri]$Url)
+    Assert-FiloDownloadUrl $Url
+    $request = [Net.HttpWebRequest]::Create($Url)
+    $request.AllowAutoRedirect = $false
+    $request.Timeout = 30000
+    $request.ReadWriteTimeout = 30000
+    $request.UserAgent = 'Filo-Installer'
+    return $request.GetResponse()
+}
+
+function Get-FiloLatestReleaseTag {
+    $latest = [uri]'https://github.com/newo-ether/filo/releases/latest'
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $response = $null
+        try {
+            $response = Get-FiloReleaseResponse $latest
+            if ([int]$response.StatusCode -notin @(301,302,303,307,308) -or -not $response.Headers['Location']) {
+                throw 'GitHub did not identify a published Filo release.'
+            }
+            $target = [uri]::new($latest, $response.Headers['Location'])
+            Assert-FiloDownloadUrl $target
+            if ($target.Host -ne 'github.com' -or $target.Query -or $target.Fragment -or
+                $target.AbsolutePath -cnotmatch '^/newo-ether/filo/releases/tag/(v[0-9]+\.[0-9]+\.[0-9]+)$') {
+                throw 'The latest release redirect has an invalid Filo version.'
+            }
+            return $Matches[1]
+        } catch {
+            if ($attempt -eq 3) { throw }
+            Write-Warning "Release lookup interrupted; retry $attempt of 2. Installation has not started."
+            Start-Sleep -Seconds 2
+        } finally { if ($response) { $response.Dispose() } }
+    }
+}
+
 function Receive-FiloReleaseFile {
     param([uri]$Url, [string]$Destination, [long]$MaximumBytes)
     $originalUrl = $Url
@@ -42,15 +77,9 @@ function Receive-FiloReleaseFile {
             $Url = $originalUrl
             $deadline = [DateTime]::UtcNow.AddMinutes(5)
             for ($redirects = 0; $redirects -le 5; $redirects++) {
-                Assert-FiloDownloadUrl $Url
-                $request = [Net.HttpWebRequest]::Create($Url)
-                $request.AllowAutoRedirect = $false
-                $request.Timeout = 30000
-                $request.ReadWriteTimeout = 30000
-                $request.UserAgent = 'Filo-Installer'
                 $response = $null
                 try {
-                    $response = $request.GetResponse()
+                    $response = Get-FiloReleaseResponse $Url
                     $status = [int]$response.StatusCode
                     if ($status -in @(301,302,303,307,308)) {
                         if ($redirects -eq 5 -or -not $response.Headers['Location']) { throw 'Too many release redirects.' }
@@ -216,12 +245,7 @@ function Assert-FiloReleaseContents {
         Write-Host '  Original Codex Desktop only; no Go, Node.js or separate CLI required.'
         Write-Host '  [1/3] Finding the Windows release...' -ForegroundColor Cyan
         $tag = $Version
-        if ($tag -eq 'latest') {
-            $metadata = Join-Path $stage 'release.json'
-            Receive-FiloReleaseFile 'https://api.github.com/repos/newo-ether/filo/releases/latest' $metadata 1MB
-            $tag = (Get-Content -Encoding UTF8 -LiteralPath $metadata -Raw | ConvertFrom-Json).tag_name
-            if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'The latest release has an invalid version.' }
-        }
+        if ($tag -eq 'latest') { $tag = Get-FiloLatestReleaseTag }
         $url = "https://github.com/newo-ether/filo/releases/download/$tag"
         $asset = 'filo-windows-amd64.zip'
         $checksums = Join-Path $stage 'checksums.txt'

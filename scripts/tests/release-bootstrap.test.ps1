@@ -42,6 +42,46 @@ try {
     }
     foreach ($url in @('https://github.com/newo-ether/filo/releases/download/v0.1.0/a.zip',
         'https://release-assets.githubusercontent.com/a?signature=public-fixture')) { Assert-FiloDownloadUrl ([uri]$url) }
+    # Exercise the production resolver with scripted HTTP responses, not a GitHub API.
+    & {
+        $script:lookupReplies = [Collections.Generic.Queue[object]]::new()
+        $script:lookupCalls = 0
+        $script:lookupDisposals = 0
+        function Start-Sleep { param([int]$Seconds) }
+        function Get-FiloReleaseResponse {
+            param([uri]$Url)
+            if ($Url.AbsoluteUri -cne 'https://github.com/newo-ether/filo/releases/latest') { throw 'Unexpected release lookup URL' }
+            $script:lookupCalls++
+            $reply = $script:lookupReplies.Dequeue()
+            if ($reply -is [Exception]) { throw $reply }
+            return $reply
+        }
+        function New-LookupResponse {
+            param([int]$Status,[string]$Location)
+            $reply = [pscustomobject]@{StatusCode=$Status;Headers=@{Location=$Location}}
+            $reply | Add-Member ScriptMethod Dispose { $script:lookupDisposals++ }
+            return $reply
+        }
+        foreach ($location in @('/newo-ether/filo/releases/tag/v0.2.3','https://github.com/newo-ether/filo/releases/tag/v0.2.3')) {
+            $script:lookupReplies.Enqueue((New-LookupResponse 302 $location))
+            if ((Get-FiloLatestReleaseTag) -cne 'v0.2.3') { throw 'Latest redirect resolution failed' }
+        }
+        $script:lookupReplies.Enqueue([Net.WebException]::new('Temporary network failure'))
+        $script:lookupReplies.Enqueue((New-LookupResponse 302 '/newo-ether/filo/releases/tag/v0.2.3'))
+        if ((Get-FiloLatestReleaseTag) -cne 'v0.2.3' -or $script:lookupCalls -ne 4 -or $script:lookupDisposals -ne 3) {
+            throw 'Latest lookup did not retry or dispose responses'
+        }
+        foreach ($location in @('https://example.com/newo-ether/filo/releases/tag/v0.2.3',
+            'https://github.com/other/filo/releases/tag/v0.2.3','/newo-ether/filo/releases/tag/v0.2.3-preview',
+            '/newo-ether/filo/releases/tag/v0.2.3?asset=other','/newo-ether/filo/releases/tag/v0.2.3#other','')) {
+            for ($n=0; $n -lt 3; $n++) { $script:lookupReplies.Enqueue((New-LookupResponse 302 $location)) }
+            Assert-Throws { Get-FiloLatestReleaseTag } 'official HTTPS|invalid Filo version|published Filo release'
+        }
+        for ($n=0; $n -lt 3; $n++) { $script:lookupReplies.Enqueue((New-LookupResponse 200 '')) }
+        Assert-Throws { Get-FiloLatestReleaseTag } 'published Filo release'
+        if ($script:lookupReplies.Count -ne 0 -or $script:lookupDisposals -ne 24) { throw 'Lookup attempts or disposal count changed' }
+    }
+
     $checksums = Join-Path $root 'checksums.txt'
     $hash = 'B' * 64
     Set-Content -LiteralPath $checksums -Value "$hash  filo-windows-amd64.zip"
@@ -107,13 +147,21 @@ try {
     $goodHash = (Get-FileHash -LiteralPath $goodZip).Hash
     $global:FiloBootstrapStages = [Collections.Generic.List[string]]::new()
     $mock = @'
+function Get-FiloReleaseResponse {
+    param([uri]$Url)
+    if ($Url.AbsoluteUri -cne 'https://github.com/newo-ether/filo/releases/latest') { throw 'Unexpected lookup URL' }
+    $reply = [pscustomobject]@{StatusCode=302;Headers=@{Location='/newo-ether/filo/releases/tag/v0.1.0'}}
+    $reply | Add-Member ScriptMethod Dispose {}
+    return $reply
+}
 function Receive-FiloReleaseFile {
     param([uri]$Url,[string]$Destination,[long]$MaximumBytes)
     if ($ProgressPreference -ne 'SilentlyContinue') { throw 'Bootstrap progress can block native remoting' }
+    if ($Url.Host -ne 'github.com' -or -not $Url.AbsolutePath.StartsWith('/newo-ether/filo/releases/download/v0.1.0/')) {
+        throw 'Bootstrap did not pin all assets to the resolved release'
+    }
     $global:FiloBootstrapStages.Add((Split-Path -Parent $Destination))
-    if ($Url.AbsolutePath.EndsWith('/latest')) {
-        '{"tag_name":"v0.1.0"}' | Set-Content -LiteralPath $Destination
-    } elseif ($Url.AbsolutePath.EndsWith('/checksums.txt')) {
+    if ($Url.AbsolutePath.EndsWith('/checksums.txt')) {
         '__HASH__  filo-windows-amd64.zip' | Set-Content -LiteralPath $Destination
     } else { Copy-Item -LiteralPath '__ZIP__' -Destination $Destination }
 }
@@ -163,7 +211,7 @@ function Receive-FiloReleaseFile {
     foreach ($stage in $global:FiloBootstrapStages | Select-Object -Unique) {
         if (Test-Path -LiteralPath $stage) { throw 'Bootstrap left a temporary download directory after completion/failure' }
     }
-    Write-Host 'Release bootstrap verification passed: URLs, checksums, traversal, duplicates, links, manifest, forwarding, empty clients, IEX, TLS restoration and cleanup.'
+    Write-Host 'Release bootstrap verification passed: latest redirects, retries, pinned asset URLs, checksums, traversal, duplicates, links, manifest, forwarding, empty clients, IEX, TLS restoration and cleanup.'
 } finally {
     Remove-Variable FiloBootstrapStages -Scope Global -ErrorAction SilentlyContinue
     $resolved = [IO.Path]::GetFullPath($root)
