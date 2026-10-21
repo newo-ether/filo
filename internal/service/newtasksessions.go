@@ -72,20 +72,26 @@ type TaskSessions struct {
 	history  TaskSessionsHistory
 	factory  TaskSessionsFactory
 
-	mu       sync.Mutex
-	entries  map[string]*taskSessionsEntry
-	opening  map[string]*taskSessionsOpening
-	draining bool
-	writes   int
-	changed  func(string)
+	mu           sync.Mutex
+	entries      map[string]*taskSessionsEntry
+	opening      map[string]*taskSessionsOpening
+	draining     bool
+	writes       int
+	changed      func(string)
+	accessSecret string
 }
 
 // taskSessionsEntry is one admitted connection and the live bookkeeping of the
 // single task it serves.
 type taskSessionsEntry struct {
-	connection TaskSessionsConnection
-	sessions   *codex.NativeTaskSession
-	activity   *codex.TaskActivity
+	connection     TaskSessionsConnection
+	sessions       *codex.NativeTaskSession
+	activity       *codex.TaskActivity
+	native         *nativeTaskSessionsConnection
+	operation      sync.Mutex
+	accessID       string
+	accessEpoch    uint64
+	executionOwner *codex.Rpc
 }
 
 // taskSessionsOpening is one in-flight acquisition, shared by every caller that
@@ -147,12 +153,17 @@ func NewTaskSessions(metadata TaskSessionsMetadata, nativeHistory TaskSessionsHi
 // with scripted connections.
 func NewTaskSessionsWith(metadata TaskSessionsMetadata, nativeHistory TaskSessionsHistory,
 	factory TaskSessionsFactory) *TaskSessions {
+	secret, err := executorSecret()
+	if err != nil {
+		panic("Cannot initialize task access identity")
+	}
 	return &TaskSessions{
-		metadata: metadata,
-		history:  nativeHistory,
-		factory:  factory,
-		entries:  map[string]*taskSessionsEntry{},
-		opening:  map[string]*taskSessionsOpening{},
+		accessSecret: secret,
+		metadata:     metadata,
+		history:      nativeHistory,
+		factory:      factory,
+		entries:      map[string]*taskSessionsEntry{},
+		opening:      map[string]*taskSessionsOpening{},
 	}
 }
 
@@ -195,6 +206,9 @@ func (s *TaskSessions) Create(ctx context.Context, text, clientID string,
 	var created protocol.Session
 	var receipt protocol.SendReceipt
 	err := s.mutation(func() error {
+		if err := protocol.ValidateScope(ctx); err != nil {
+			return err
+		}
 		recordCreateStage(ctx, createStageHelperAllocationStarted, nil)
 		connection, err := s.factory.Open(ctx, nil)
 		if err != nil {
@@ -212,7 +226,13 @@ func (s *TaskSessions) Create(ctx context.Context, text, clientID string,
 			connection.Close()
 			return drainingError()
 		}
-		sessions := codex.NewNativeTaskSession(connection.Transport())
+		native := s.taskNative(connection)
+		native.ctx = ctx
+		sessions := codex.NewNativeTaskSession(native)
+		if err := protocol.ValidateScope(ctx); err != nil {
+			connection.Close()
+			return err
+		}
 		recordCreateStage(ctx, createStageHelperNativeStartStarted, nil)
 		session, err := sessions.Create()
 		if err != nil {
@@ -234,7 +254,14 @@ func (s *TaskSessions) Create(ctx context.Context, text, clientID string,
 			return err
 		}
 		recordCreateStage(ctx, createStageHelperProvenanceVerified, nil)
-		entry := s.register(session.ID, connection, sessions)
+		entry := s.register(session.ID, connection, sessions, native)
+		entry.operation.Lock()
+		defer func() {
+			native.mu.Lock()
+			native.ctx = nil
+			native.mu.Unlock()
+			entry.operation.Unlock()
+		}()
 		s.mu.Lock()
 		if s.draining {
 			s.mu.Unlock()
@@ -249,6 +276,10 @@ func (s *TaskSessions) Create(ctx context.Context, text, clientID string,
 		// never-started task is then left unpersisted by the native side, which
 		// is exactly the state a rejected creation must leave behind.
 		if settings.Model.Known || settings.Effort.Known || settings.ServiceTier.Known {
+			if err := protocol.ValidateScope(ctx); err != nil {
+				connection.Close()
+				return err
+			}
 			if err := entry.sessions.UpdateSettings(session.ID, settings); err != nil {
 				connection.Close()
 				return err
@@ -259,6 +290,10 @@ func (s *TaskSessions) Create(ctx context.Context, text, clientID string,
 		// native task was created, so the thread is materialized before this
 		// mutation returns and no empty, unpersisted window remains.
 		input := []any{map[string]any{"type": "text", "text": protocol.Text(text), "text_elements": []any{}}}
+		if err := protocol.ValidateScope(ctx); err != nil {
+			connection.Close()
+			return err
+		}
 		value, err := entry.sessions.StartTurn(session.ID, input, clientID)
 		if err != nil {
 			return err
@@ -345,6 +380,11 @@ func (s *TaskSessions) Send(ctx context.Context, id, text, clientID string) (pro
 		if entry == nil {
 			return notReady()
 		}
+		release, err := s.bindTaskMutation(ctx, id, entry)
+		if err != nil {
+			return err
+		}
+		defer release()
 		snapshot, err := entry.sessions.Snapshot(id)
 		if err != nil {
 			return err
@@ -356,7 +396,7 @@ func (s *TaskSessions) Send(ctx context.Context, id, text, clientID string) (pro
 		}
 		input := []any{map[string]any{"type": "text", "text": protocol.Text(text), "text_elements": []any{}}}
 		if runtime.Status == "active" && runtime.ActiveTurnID != nil {
-			value, err := entry.connection.Transport().Request("turn/steer", map[string]any{
+			value, err := entry.native.Request("turn/steer", map[string]any{
 				"threadId": id, "input": input, "clientUserMessageId": clientID,
 				"expectedTurnId": *runtime.ActiveTurnID,
 			})
@@ -405,6 +445,11 @@ func (s *TaskSessions) UpdateSettings(ctx context.Context, id string,
 		if entry == nil {
 			return notReady()
 		}
+		release, err := s.bindTaskMutation(ctx, id, entry)
+		if err != nil {
+			return err
+		}
+		defer release()
 		return entry.sessions.UpdateSettings(id, settings)
 	})
 }
@@ -425,6 +470,11 @@ func (s *TaskSessions) Stop(ctx context.Context, id, turnID string) error {
 		if entry == nil {
 			return activeTurnChanged()
 		}
+		release, err := s.bindTaskMutation(ctx, id, entry)
+		if err != nil {
+			return err
+		}
+		defer release()
 		snapshot, err := entry.sessions.Snapshot(id)
 		if err != nil {
 			return err
@@ -552,12 +602,19 @@ func (s *TaskSessions) mutation(operation func() error) error {
 // entry is inserted by its caller only after the task is attached, so the entry
 // table never publishes a connection that failed to admit its task.
 func (s *TaskSessions) register(id string, connection TaskSessionsConnection,
-	sessions *codex.NativeTaskSession) *taskSessionsEntry {
+	sessions *codex.NativeTaskSession, native *nativeTaskSessionsConnection) *taskSessionsEntry {
 	activity := codex.NewTaskActivity(id)
-	entry := &taskSessionsEntry{connection: connection, sessions: sessions, activity: activity}
+	accessID, err := executorSecret()
+	if err != nil {
+		panic("Cannot initialize task connection identity")
+	}
+	entry := &taskSessionsEntry{connection: connection, sessions: sessions, activity: activity,
+		native: native, accessID: accessID, executionOwner: connection.Transport()}
+	s.registerTaskAccess(id, entry)
 	// Dispatch the single notification slot to sessions, then activity.
 	connection.Transport().SetHandlers(nil, func(packet map[string]any) {
 		method, _ := packet["method"].(string)
+		s.observeTaskAccess(id, entry, method, packet["params"])
 		sessions.Receive(method, packet["params"])
 		activity.Receive(method, packet["params"])
 	})
@@ -602,6 +659,10 @@ func (s *TaskSessions) acquire(ctx context.Context, id string, write bool) (*tas
 	if current := s.entries[id]; current != nil {
 		s.mu.Unlock()
 		return current, nil
+	}
+	if protocol.AccessBinding(ctx) != "" {
+		s.mu.Unlock()
+		return nil, taskAccessChanged()
 	}
 	if pending := s.opening[id]; pending != nil {
 		s.mu.Unlock()
@@ -661,8 +722,9 @@ func (s *TaskSessions) open(ctx context.Context, id string, write bool) (*taskSe
 		connection.Close()
 		return nil, drainingError()
 	}
-	sessions := codex.NewNativeTaskSession(connection.Transport())
-	entry := s.register(id, connection, sessions)
+	native := s.taskNative(connection)
+	sessions := codex.NewNativeTaskSession(native)
+	entry := s.register(id, connection, sessions, native)
 	// This is the same authenticated host that already owns this admitted task,
 	// never a browsing-time writer.
 	if err := sessions.Attach(id); err != nil {

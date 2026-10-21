@@ -35,6 +35,14 @@ func RecoverableRuntime(runtime *protocol.Runtime) bool {
 }
 
 func (sessions *DesktopSessions) mutationDestination(ctx context.Context, id string) (string, context.Context, error) {
+	admitted, err := sessions.admitAccess(ctx, id)
+	if err != nil {
+		return "", ctx, err
+	}
+	ctx = admitted
+	if owner, scoped, err := sessions.scopedDestination(ctx, id); err != nil || scoped {
+		return owner, ctx, err
+	}
 	owner, err := sessions.f.owner(ctx, id)
 	if err != nil || owner != "" {
 		return owner, ctx, err

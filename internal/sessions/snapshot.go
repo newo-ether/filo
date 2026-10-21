@@ -9,6 +9,10 @@ import (
 )
 
 func (f *Followers) acquire(id, owner string, retain, readOnly bool) (*followed, error) {
+	var connection uint64
+	if bound, ok := f.ipc.(ConnectionBoundIPC); ok {
+		connection = bound.ConnectionGeneration()
+	}
 	f.mu.Lock()
 	if f.stopped {
 		f.mu.Unlock()
@@ -20,7 +24,7 @@ func (f *Followers) acquire(id, owner string, retain, readOnly bool) (*followed,
 	}
 	entry := f.entries[id]
 	var replaced *followed
-	if entry != nil && entry.owner != owner {
+	if entry != nil && (entry.owner != owner || entry.connectionGeneration != connection) {
 		if entry.state == nil {
 			f.mu.Unlock()
 			return nil, unavailable()
@@ -35,7 +39,10 @@ func (f *Followers) acquire(id, owner string, retain, readOnly bool) (*followed,
 			f.mu.Unlock()
 			return nil, errors.New("Too many desktop subscriptions")
 		}
-		entry = &followed{id: id, owner: owner, revision: -1, used: time.Now(), ready: make(chan struct{}), updated: make(chan struct{})}
+		f.nextGeneration++
+		entry = &followed{id: id, owner: owner, generation: f.nextGeneration,
+			connectionGeneration: connection, revision: -1, used: time.Now(),
+			ready: make(chan struct{}), updated: make(chan struct{})}
 		f.entries[id] = entry
 	}
 	entry.used = time.Now()

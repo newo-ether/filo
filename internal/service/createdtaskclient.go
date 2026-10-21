@@ -256,7 +256,7 @@ func (c *CreatedTaskClient) Send(ctx context.Context, id, text, clientID string)
 	if err := c.admitMutation(ctx, id); err != nil {
 		return protocol.SendReceipt{}, err
 	}
-	raw, err := c.call(ctx, "/v1/sessions/"+id+"/messages",
+	raw, err := c.callMutation(ctx, id, "messages",
 		map[string]any{"text": text, "clientId": clientID})
 	if err != nil {
 		return protocol.SendReceipt{}, err
@@ -275,7 +275,7 @@ func (c *CreatedTaskClient) UpdateSettings(ctx context.Context, id string,
 	if err := c.admitMutation(ctx, id); err != nil {
 		return err
 	}
-	raw, err := c.call(ctx, "/v1/sessions/"+id+"/settings", settings)
+	raw, err := c.callMutation(ctx, id, "settings", settings)
 	if err != nil {
 		return err
 	}
@@ -291,7 +291,7 @@ func (c *CreatedTaskClient) Stop(ctx context.Context, id, turnID string) error {
 	if err := c.admit(id); err != nil {
 		return err
 	}
-	raw, err := c.call(ctx, "/v1/sessions/"+id+"/stop", map[string]any{"turnId": turnID})
+	raw, err := c.callMutation(ctx, id, "stop", map[string]any{"turnId": turnID})
 	if err != nil {
 		return err
 	}

@@ -25,30 +25,34 @@ type Hooks struct {
 }
 
 type followed struct {
-	id, owner              string
-	revision               int64
-	settingsEvidence       desktopSettingsEvidence
-	state                  codex.DesktopState
-	used                   time.Time
-	refs                   int
-	ready                  chan struct{}
-	updated                chan struct{}
-	settled, readRequested bool
-	err                    error
-	persisted              *persistedRead
+	id, owner               string
+	generation, accessEpoch uint64
+	connectionGeneration    uint64
+	turnIdentity            string
+	revision                int64
+	settingsEvidence        desktopSettingsEvidence
+	state                   codex.DesktopState
+	used                    time.Time
+	refs                    int
+	ready                   chan struct{}
+	updated                 chan struct{}
+	settled, readRequested  bool
+	err                     error
+	persisted               *persistedRead
 }
 
 type Followers struct {
-	mu      sync.Mutex
-	sendMu  sync.Mutex
-	ipc     IPC
-	hooks   Hooks
-	ctx     context.Context
-	cancel  context.CancelFunc
-	entries map[string]*followed
-	seen    map[string]bool
-	retry   map[string]time.Time
-	stopped bool
+	mu             sync.Mutex
+	sendMu         sync.Mutex
+	ipc            IPC
+	hooks          Hooks
+	ctx            context.Context
+	cancel         context.CancelFunc
+	entries        map[string]*followed
+	seen           map[string]bool
+	retry          map[string]time.Time
+	stopped        bool
+	nextGeneration uint64
 }
 
 func unavailable() error {

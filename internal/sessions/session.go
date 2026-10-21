@@ -61,14 +61,28 @@ type Options struct {
 	Base    Base
 	Created CreatedReader
 	Hooks   Hooks
+	// AccessScope verifies the currently selected native account/store identity.
+	// Missing proof never enables scoped control, even for a matching thread ID.
+	AccessScope func(context.Context) (string, error)
+	// AccessBinding reads the native binding admitted by scoped HTTP validation.
+	// WithAccessBinding forwards an explicit created/recovered executor binding.
+	AccessBinding     func(context.Context) string
+	WithAccessBinding func(context.Context, string) context.Context
 }
 type DesktopSessions struct {
-	f       *Followers
-	options Options
+	f            *Followers
+	options      Options
+	accessSecret [32]byte
 }
 
 func New(options Options) *DesktopSessions {
-	return &DesktopSessions{f: NewFollowers(options.IPC, options.Hooks), options: options}
+	if options.AccessBinding == nil {
+		options.AccessBinding = protocol.AccessBinding
+	}
+	if options.WithAccessBinding == nil {
+		options.WithAccessBinding = protocol.WithAccessBinding
+	}
+	return &DesktopSessions{f: NewFollowers(options.IPC, options.Hooks), options: options, accessSecret: accessSecret()}
 }
 
 func (sessions *DesktopSessions) Receive(message desktop.Message) { sessions.f.Receive(message) }

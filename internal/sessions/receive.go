@@ -29,11 +29,17 @@ func (f *Followers) owner(ctx context.Context, id string) (string, error) {
 		return "", unavailable()
 	}
 	if text(response["resultType"]) == "error" && text(response["error"]) == "no-client-found" {
+		if entry := f.entries[id]; entry != nil {
+			entry.accessEpoch++
+		}
 		return "", nil
 	}
 	owner := text(response["handledByClientId"])
 	if text(response["resultType"]) != "success" || owner == "" || fields(response["result"])["supportsUntrustedAppInput"] != true {
 		return "", unavailable()
+	}
+	if entry := f.entries[id]; entry != nil && entry.owner != owner {
+		entry.accessEpoch++
 	}
 	f.seen[id] = true
 	return owner, nil
@@ -103,6 +109,11 @@ func (f *Followers) Receive(message desktop.Message) {
 		_ = f.follow(entry, false)
 		f.closed()
 		return
+	}
+	identity := desktopTurnIdentity(entry.state)
+	if identity != entry.turnIdentity {
+		entry.accessEpoch++
+		entry.turnIdentity = identity
 	}
 	entry.revision = int64(revision)
 	entry.recordSettingsEvidence(change)

@@ -24,6 +24,7 @@ func (o *Optional[T]) UnmarshalJSON(data []byte) error {
 }
 
 type Session struct {
+	Access    *SessionAccess    `json:"access,omitempty"`
 	ID        string            `json:"id"`
 	Title     Text              `json:"title"`
 	Cwd       string            `json:"cwd"`
@@ -119,6 +120,7 @@ type InputReceipt struct {
 }
 
 type ConversationPage struct {
+	Access        *SessionAccess   `json:"access,omitempty"`
 	PageCursor    Optional[string] `json:"pageCursor,omitzero"`
 	Nodes         []MessageNode    `json:"nodes,omitempty"`
 	Messages      []Message        `json:"messages"`
@@ -131,6 +133,7 @@ type ConversationPage struct {
 // TopologyPage omits message bodies and the page cursor, and requires the node
 // list. Message bodies remain in the recoverable payload cache.
 type TopologyPage struct {
+	Access        *SessionAccess `json:"access,omitempty"`
 	Nodes         []MessageNode  `json:"nodes"`
 	NextCursor    *string        `json:"nextCursor"`
 	Queued        []QueuedInput  `json:"queued"`

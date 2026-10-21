@@ -93,6 +93,14 @@ func (sessions *DesktopSessions) UpdateSettings(ctx context.Context, id string, 
 	if err != nil {
 		return err
 	}
+	mutationCtx, err = sessions.scopedMutationContext(mutationCtx, id, "settings")
+	if err != nil {
+		return err
+	}
+	ctx = mutationCtx
+	if err := sessions.scopedSettings(ctx, id, settings); err != nil {
+		return err
+	}
 	if owner == "" {
 		if sessions.options.Created == nil {
 			return errCreatedScope
@@ -142,6 +150,11 @@ func (sessions *DesktopSessions) Send(ctx context.Context, id, value, clientID s
 	if err != nil {
 		return empty, err
 	}
+	mutationCtx, err = sessions.scopedMutationContext(mutationCtx, id, "send")
+	if err != nil {
+		return empty, err
+	}
+	ctx = mutationCtx
 	if owner == "" {
 		if sessions.options.Created == nil {
 			return empty, errCreatedScope
@@ -205,7 +218,15 @@ func (sessions *DesktopSessions) Send(ctx context.Context, id, value, clientID s
 // Stop interrupts exactly the confirmed active turn of the original owner. A
 // stale turn id, or a native outcome that leaves the turn running, is refused.
 func (sessions *DesktopSessions) Stop(ctx context.Context, id, turnID string) error {
+	ctx, err := sessions.admitAccess(ctx, id)
+	if err != nil {
+		return err
+	}
 	owner, err := sessions.destination(ctx, id)
+	if err != nil {
+		return err
+	}
+	ctx, err = sessions.scopedMutationContext(ctx, id, "stop")
 	if err != nil {
 		return err
 	}
@@ -255,6 +276,9 @@ func (sessions *DesktopSessions) controlState(ctx context.Context, id, owner str
 // scope, and the owner is rechecked so an owner appearing mid-dispatch refuses
 // the auxiliary path.
 func (sessions *DesktopSessions) destination(ctx context.Context, id string) (string, error) {
+	if owner, scoped, err := sessions.scopedDestination(ctx, id); err != nil || scoped {
+		return owner, err
+	}
 	owner, err := sessions.f.owner(ctx, id)
 	if err != nil {
 		return "", err
@@ -294,7 +318,7 @@ func (sessions *DesktopSessions) operation(ctx context.Context, id, owner, metho
 	for key, value := range params {
 		merged[key] = value
 	}
-	response, err := sessions.options.IPC.Request(ctx, method, version, merged, owner)
+	response, err := sessions.requestOperation(ctx, id, owner, method, version, merged)
 	if err != nil {
 		return nil, err
 	}
