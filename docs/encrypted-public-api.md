@@ -33,3 +33,43 @@ The public wrapper and raw upload protocol passed isolated Go/Android interopera
 These tests do not qualify native service assembly, production installation, real
 native attachment consumption or Codex failure isolation. Complete those gates before
 installing the strict Agora encrypted client. No production downgrade is supported.
+
+## Optional multi-source extension
+
+Protocol 2 discovery may include `extensions: {"multiAdapter": 1}` and up to three
+configured `adapters`: `codex-desktop`, `codex-cli`, `claude-code`. Each descriptor
+includes family, origin, availability, opaque nativeScopeId and proven capabilities.
+Unavailable configured sources remain advertised. A failed scope lookup never reuses
+an earlier verified account identity. CLI/Claude-only services use sessionMode
+`multi-source`; legacy `/v1/*` routes remain Desktop and never follow source selection.
+
+All source routes use `/v1/adapters/{adapterId}/...`, including catalog, history,
+status, events, payloads, images, models, usage, settings, management and uploads.
+Session, conversation and topology access metadata separates shared verified native
+identity (`nativeScopeId`, `canonicalSessionRef`) from revocable control (`binding`,
+capabilities). Shared canonical identity grants no permission on another access path.
+Codex canonical identity is base64url(SHA256(JSON(["codex", scope, nativeSessionId]))).
+Only verified account/store continuity allows shared drafts or unread records.
+
+Existing-session mutations carry `accessBinding` in the encrypted JSON body. The
+server removes it before parsing settings and validates the exact native scope,
+owner/connection generation and turn again at dispatch. An arbitrary HTTP header is
+not a transport for this field: the unchanged Conch encrypted envelope forwards only
+method, path, contentType and body. Pending input, Stop or settings never switch
+sources or replay when an owner changes.
+
+Create and upload initialization carry the captured descriptor's `nativeScopeId`
+in encrypted JSON. The server independently captures fresh scope, compares it before
+admission, removes the field and propagates a local scope validator to final native
+dispatch. Private helper forwarding must carry the expected scope in JSON and
+reconstruct its own validator; a Go context does not cross HTTP. Subsequent upload
+chunks/completion and attachment IDs use authenticated source/scope tokens. History
+and catalog cursors are source/scope/session sealed; payload revisions and caches
+are source/scope qualified. Payload, upload, image and event budgets remain shared
+across the whole device.
+
+Current CLI integration exposes bounded read-only verified history. Claude observes
+text rows from open opted-in Mod sessions after registration, within a bounded
+window. It does not recover pre-registration history or tool/media/thinking rows.
+Neither advertises native mutation authority without proven receipts and terminal
+semantics. Fixtures and builds do not qualify actual native runtime equivalence.

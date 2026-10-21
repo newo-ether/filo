@@ -90,6 +90,10 @@ func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 			flush()
 			return err
 		}
+		page, err = s.projectStreamPage(id, page)
+		if err != nil {
+			return err
+		}
 		text, err := EncodeResponse(page)
 		if err != nil {
 			s.writeStreamError(w, err)
@@ -119,6 +123,13 @@ func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 			return nil
 		case <-subscription.Signal():
 		case <-ticker.C:
+			if s.scoped != nil {
+				if err := s.scoped.check(ctx); err != nil {
+					s.writeStreamError(w, err)
+					_ = flush()
+					return nil
+				}
+			}
 			if _, err := io.WriteString(w, ": keepalive\n\n"); err != nil {
 				return err
 			}

@@ -3,8 +3,11 @@ package service
 import (
 	"container/list"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/newo-ether/filo/internal/protocol"
@@ -80,6 +83,10 @@ func (p *ConversationPayloads) remember(session string, message protocol.Message
 	} else {
 		projected = MessageNode(message, serialized)
 	}
+	if strings.HasPrefix(session, scopedSessionPrefix) {
+		digest := sha256.Sum256([]byte(session + "\x00" + projected.Revision))
+		projected.Revision = hex.EncodeToString(digest[:])
+	}
 	key := payloadKey(session, message.ID, projected.Revision)
 	bytes := len(serialized)
 	p.mu.Lock()
@@ -139,7 +146,10 @@ func (p *ConversationPayloads) Page(ctx context.Context, source ConversationRead
 		if index < len(page.Nodes) {
 			node = &page.Nodes[index]
 		}
-		p.remember(session, message, node)
+		projected := p.remember(session, message, node)
+		if index < len(page.Nodes) {
+			page.Nodes[index] = projected
+		}
 	}
 	return page, nil
 }
@@ -162,6 +172,7 @@ func (p *ConversationPayloads) Topology(ctx context.Context, source Conversation
 		Queued:        page.Queued,
 		Runtime:       page.Runtime,
 		InputReceipts: page.InputReceipts,
+		Access:        page.Access,
 	}, nil
 }
 
@@ -210,7 +221,7 @@ func (p *ConversationPayloads) Load(ctx context.Context, source ConversationRead
 			if _, cached := found[message.ID]; cached {
 				continue
 			}
-			if exactRevision && revision != node.Revision {
+			if (exactRevision || strings.HasPrefix(session, scopedSessionPrefix)) && revision != node.Revision {
 				return empty, CodexRpcError("Image changed; reload its message", -32600)
 			}
 			found[message.ID] = message

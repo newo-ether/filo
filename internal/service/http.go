@@ -18,7 +18,6 @@ import (
 	"github.com/newo-ether/filo/internal/apierror"
 	"github.com/newo-ether/filo/internal/codex"
 	"github.com/newo-ether/filo/internal/protocol"
-	"github.com/newo-ether/filo/internal/toolpreview"
 	"github.com/newo-ether/filo/internal/uploads"
 )
 
@@ -87,6 +86,7 @@ type ServerOptions struct {
 	Hostname         string
 	CreateLogPath    string
 	TrustCreateTrace bool
+	Adapters         []Adapter
 }
 
 // Server answers the bounded Filo wire. Every response is bounded by
@@ -107,6 +107,10 @@ type Server struct {
 	hostname         string
 	createLog        *createDiagnostics
 	trustCreateTrace bool
+	adapters         map[string]*adapterSurface
+	adapterOrder     []string
+	scoped           *adapterView
+	imageOwner       *Server
 
 	imageMu      sync.Mutex
 	imageReaders int
@@ -118,7 +122,7 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if !tokenPattern.MatchString(options.Token) {
 		return nil, errors.New("Filo requires a 256-bit hexadecimal token")
 	}
-	if options.Sessions == nil {
+	if options.Sessions == nil && len(options.Adapters) == 0 {
 		return nil, errors.New("Filo requires a session surface")
 	}
 	payloads := options.Payloads
@@ -160,6 +164,9 @@ func NewServer(options ServerOptions) (*Server, error) {
 	if shutdowner, ok := options.Sessions.(Shutdowner); ok {
 		server.shutdown = shutdowner
 	}
+	if err := server.configureAdapters(options.Adapters); err != nil {
+		return nil, err
+	}
 	return server, nil
 }
 
@@ -199,10 +206,12 @@ type errorResponse = apierror.Response
 type infoResponse struct {
 	SupportsRawUploads bool `json:"supportsRawUploads"`
 	protocol.ServiceInfo
-	Device               string         `json:"device"`
-	SupportsSafeShutdown bool           `json:"supportsSafeShutdown"`
-	Desktop              *DesktopStatus `json:"desktop,omitempty"`
-	Build                buildInfo      `json:"build"`
+	Device               string                       `json:"device"`
+	SupportsSafeShutdown bool                         `json:"supportsSafeShutdown"`
+	Desktop              *DesktopStatus               `json:"desktop,omitempty"`
+	Build                buildInfo                    `json:"build"`
+	Extensions           map[string]int               `json:"extensions,omitempty"`
+	Adapters             []protocol.AdapterDescriptor `json:"adapters,omitempty"`
 }
 
 type modelsResponse struct {
@@ -303,6 +312,12 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) route(w *tracking, request *http.Request) error {
+	if strings.HasPrefix(request.URL.Path, "/v1/adapters/") {
+		return s.routeAdapter(w, request)
+	}
+	if s.sessions == nil && request.URL.Path != "/v1/info" && request.URL.Path != "/v1/shutdown" {
+		return s.respond(w, http.StatusServiceUnavailable, errorResponse{Error: "Desktop source is unavailable"})
+	}
 	query := request.URL.Query()
 	cursor := query.Get("cursor")
 	excludedTurns := []string{}
@@ -335,7 +350,7 @@ func (s *Server) route(w *tracking, request *http.Request) error {
 		}
 		return s.respond(w, http.StatusOK, value)
 	case request.Method == http.MethodGet && path == "/v1/info":
-		return s.info(w)
+		return s.info(w, request.Context())
 	case request.Method == http.MethodPost && path == "/v1/shutdown" && s.onShutdown != nil && s.local(request):
 		return s.shutdownRequest(w, request)
 	case request.Method == http.MethodGet && path == "/v1/sessions/status":
@@ -389,7 +404,7 @@ func (s *Server) route(w *tracking, request *http.Request) error {
 	return s.session(w, request, id, action, cursor, excludedTurns)
 }
 
-func (s *Server) info(w *tracking) error {
+func (s *Server) info(w *tracking, ctx context.Context) error {
 	info := infoResponse{
 		SupportsRawUploads:   s.uploads != nil,
 		ServiceInfo:          protocol.CodexServiceInfo,
@@ -407,6 +422,17 @@ func (s *Server) info(w *tracking) error {
 	if s.desktopStatus != nil {
 		value := s.desktopStatus()
 		info.Desktop = &value
+	}
+	if s.adapters != nil {
+		info.Extensions = map[string]int{"multiAdapter": protocol.MultiAdapterVersion}
+		for _, id := range s.adapterOrder {
+			info.Adapters = append(info.Adapters, s.adapters[id].descriptor(ctx))
+		}
+		if s.sessions == nil {
+			info.ServiceInfo = protocol.ServiceInfo{ProtocolVersion: 2, SessionMode: "multi-source"}
+			info.SupportsRawUploads = false
+			info.Desktop = nil
+		}
 	}
 	return s.respond(w, http.StatusOK, info)
 }
@@ -476,6 +502,16 @@ func (s *Server) session(w *tracking, request *http.Request, id, action, cursor 
 	ctx := request.Context()
 	query := request.URL.Query()
 	switch {
+	case request.Method == http.MethodGet && action == "access" && s.layer == "worker":
+		provider, ok := s.sessions.(SessionAccessProvider)
+		if !ok {
+			return s.respond(w, http.StatusNotImplemented, errorResponse{Error: "Native access is unavailable"})
+		}
+		value, err := provider.Access(ctx, id)
+		if err != nil {
+			return err
+		}
+		return s.respond(w, http.StatusOK, value)
 	case request.Method == http.MethodGet && action == "":
 		if query.Get("includeMetadata") == "true" {
 			page, err := s.payloads.Page(ctx, s.sessions, id, cursor, s.layer, excludedTurns)
@@ -550,6 +586,11 @@ func (s *Server) image(w *tracking, request *http.Request, id string) error {
 	if request.Context().Err() != nil {
 		return nil
 	}
+	if s.scoped != nil {
+		if err := s.scoped.check(request.Context()); err != nil {
+			return err
+		}
+	}
 	index, err := inlineImageIndex(items[0])
 	if err != nil {
 		return err
@@ -575,71 +616,10 @@ func inlineImageIndex(item any) (*int, error) {
 	return index, nil
 }
 
-func (s *Server) mutate(w *tracking, request *http.Request, id, action string) error {
-	input, err := readBody(request)
-	if err != nil {
-		return s.respond(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-	}
-	ctx := s.mutationContext(request, id, action)
-	switch action {
-	case "rename":
-		name, ok := input["name"].(string)
-		if !ok || strings.TrimSpace(name) == "" || toolpreview.UTF16Len(name) > maxRenameUnits {
-			return s.respond(w, http.StatusBadRequest, errorResponse{Error: "Expected a task name"})
-		}
-		session, err := s.sessions.Rename(ctx, id, name)
-		if err != nil {
-			return err
-		}
-		return s.respond(w, http.StatusOK, session)
-	case "archive":
-		cwd, err := s.sessions.Archive(ctx, id)
-		if err != nil {
-			return err
-		}
-		return s.respond(w, http.StatusOK, archiveResponse{Archived: true, Cwd: cwd})
-	case "settings":
-		settings, err := codex.ParseSettings(input)
-		if err != nil {
-			return err
-		}
-		if err := s.sessions.UpdateSettings(ctx, id, settings); err != nil {
-			return err
-		}
-		return s.respond(w, http.StatusOK, updatedResponse{Updated: true})
-	case "model":
-		model, ok := input["model"].(string)
-		if !ok || strings.TrimSpace(model) == "" {
-			return s.respond(w, http.StatusBadRequest, errorResponse{Error: "Expected model"})
-		}
-		if err := s.sessions.SetModel(ctx, id, model); err != nil {
-			return err
-		}
-		return s.respond(w, http.StatusOK, updatedResponse{Updated: true})
-	case "stop":
-		turnID, ok := input["turnId"].(string)
-		if !ok || turnID == "" {
-			return s.respond(w, http.StatusBadRequest, errorResponse{Error: "Expected turnId"})
-		}
-		if err := s.sessions.Stop(ctx, id, turnID); err != nil {
-			return err
-		}
-		return s.respond(w, http.StatusOK, stoppedResponse{Stopped: true})
-	case "messages":
-		text, clientID, err := s.messageText(input)
-		if err != nil {
-			return s.respond(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
-		}
-		receipt, err := s.sessions.Send(ctx, id, text, clientID)
-		if err != nil {
-			return err
-		}
-		return s.respond(w, http.StatusAccepted, receipt)
-	}
-	return s.respond(w, http.StatusNotFound, errorResponse{Error: "Not found"})
-}
-
 func (s *Server) acquireImageReader() bool {
+	if s.imageOwner != nil {
+		return s.imageOwner.acquireImageReader()
+	}
 	s.imageMu.Lock()
 	defer s.imageMu.Unlock()
 	if s.imageReaders >= maxImageReaders {
@@ -650,6 +630,10 @@ func (s *Server) acquireImageReader() bool {
 }
 
 func (s *Server) releaseImageReader() {
+	if s.imageOwner != nil {
+		s.imageOwner.releaseImageReader()
+		return
+	}
 	s.imageMu.Lock()
 	s.imageReaders--
 	s.imageMu.Unlock()
@@ -667,7 +651,7 @@ func sessionRoute(path string) (id, action string, ok bool) {
 		return "", "", false
 	}
 	switch action {
-	case "", "messages", "events", "model", "settings", "stop", "topology", "payloads", "image", "rename", "archive":
+	case "", "access", "messages", "events", "model", "settings", "stop", "topology", "payloads", "image", "rename", "archive":
 		return id, action, true
 	}
 	return "", "", false
