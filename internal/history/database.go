@@ -42,16 +42,24 @@ var databaseFamilies = map[DatabaseKind]databaseFamily{
 // OpenDatabase discovers afresh on every call. A newer incompatible database is
 // an explicit failure, never permission to expose an older stale catalog.
 func OpenDatabase(ctx context.Context, home string, kind DatabaseKind) (*sql.DB, error) {
-	if err := ctx.Err(); err != nil {
+	path, family, err := discoverDatabase(ctx, home, kind)
+	if err != nil {
 		return nil, err
+	}
+	return openDatabase(ctx, path, kind, family)
+}
+
+func discoverDatabase(ctx context.Context, home string, kind DatabaseKind) (string, databaseFamily, error) {
+	if err := ctx.Err(); err != nil {
+		return "", databaseFamily{}, err
 	}
 	family, ok := databaseFamilies[kind]
 	if !ok {
-		return nil, errors.New("Unknown native database family")
+		return "", databaseFamily{}, errors.New("Unknown native database family")
 	}
 	entries, err := os.ReadDir(home)
 	if err != nil {
-		return nil, err
+		return "", databaseFamily{}, err
 	}
 	type candidate struct {
 		entry   os.DirEntry
@@ -71,20 +79,27 @@ func OpenDatabase(ctx context.Context, home string, kind DatabaseKind) (*sql.DB,
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].version.Cmp(candidates[j].version) > 0 })
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("Native %s database is unavailable", kind)
+		return "", databaseFamily{}, fmt.Errorf("Native %s database is unavailable", kind)
 	}
 	selected := candidates[0]
 	if len(candidates) > 1 && selected.version.Cmp(candidates[1].version) == 0 {
-		return nil, fmt.Errorf("Native %s database selection is ambiguous", kind)
+		return "", databaseFamily{}, fmt.Errorf("Native %s database selection is ambiguous", kind)
 	}
 	info, err := selected.entry.Info()
 	if err != nil {
-		return nil, err
+		return "", databaseFamily{}, err
 	}
 	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("Native %s database must be a regular file", kind)
+		return "", databaseFamily{}, fmt.Errorf("Native %s database must be a regular file", kind)
 	}
-	dsn, err := readOnlyURI(filepath.Join(home, selected.entry.Name()))
+	if err := ctx.Err(); err != nil {
+		return "", databaseFamily{}, err
+	}
+	return filepath.Join(home, selected.entry.Name()), family, nil
+}
+
+func openDatabase(ctx context.Context, path string, kind DatabaseKind, family databaseFamily) (*sql.DB, error) {
+	dsn, err := readOnlyURI(path)
 	if err != nil {
 		return nil, err
 	}
