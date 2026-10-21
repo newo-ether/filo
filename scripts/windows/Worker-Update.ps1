@@ -108,7 +108,8 @@ function Restore-FiloWorkerUpdate {
     Set-ScheduledTask -TaskName 'Filo-User-Agent' -Action $Plan.Action | Out-Null
     if ($Plan.WasRunning) {
         Start-ScheduledTask -TaskName 'Filo-User-Agent'
-        Wait-FiloEndpoint $Plan.Url (Join-Path $Plan.StateDirectory 'token') 'standalone'
+        $mode = if ($Plan.Launch.PSObject.Properties['sources'] -and @($Plan.Launch.sources) -notcontains 'codex-desktop') { 'multi-source' } else { 'standalone' }
+        Wait-FiloEndpoint $Plan.Url (Join-Path $Plan.StateDirectory 'token') $mode
     }
     $Plan.Changed = $false
 }
@@ -126,5 +127,6 @@ function Start-FiloWorkerUpdate {
     $action = New-FiloTaskAction $Runtime $Plan.StateDirectory Gateway $next.workspaceDirectory
     Set-ScheduledTask -TaskName 'Filo-User-Agent' -Action $action | Out-Null
     Start-ScheduledTask -TaskName 'Filo-User-Agent'
-    Wait-FiloEndpoint $Plan.Url (Join-Path $Plan.StateDirectory 'token') 'standalone'
+    $mode = if ($next.PSObject.Properties['sources'] -and @($next.sources) -notcontains 'codex-desktop') { 'multi-source' } else { 'standalone' }
+    Wait-FiloEndpoint $Plan.Url (Join-Path $Plan.StateDirectory 'token') $mode
 }

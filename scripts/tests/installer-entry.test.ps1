@@ -22,6 +22,12 @@ function Get-FiloBundle { @{revision=('a'*40)} }
 function Assert-FiloPrivatePath { param($Path,$Root) if(-not $global:FiloEntryAdmin){throw 'Protected state must not be read without elevation'}; Join-Path $global:FiloEntryRoot 'state' }
 function Get-FiloWorkerState { Join-Path $global:FiloEntryRoot 'worker' }
 '@)
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\windows\Source-Selection.ps1') -Destination $modules
+    [IO.File]::WriteAllText((Join-Path $modules 'Source-Selection.ps1'), @'
+. (Join-Path $PSScriptRoot 'Source-Selection-real.ps1')
+function Get-FiloSourceOptions { param($Worker,$Sources,$Socket,$SocketSpecified,$BridgePort,$BridgeSpecified,$PublicPort) [pscustomobject]@{Sources=$Sources;CodexDaemonSocket='';ClaudeBridgePort=7438} }
+'@)
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\windows\Source-Selection.ps1') -Destination (Join-Path $modules 'Source-Selection-real.ps1')
     [IO.File]::WriteAllText((Join-Path $modules 'Installer-Tasks.ps1'),"function Get-FiloInstallBind { '127.0.0.1' }")
     foreach($name in @('Worker-Update','Host-Lifecycle','Uninstall-Transaction')) {
         [IO.File]::WriteAllText((Join-Path $modules ($name+'.ps1')), '# No OS interaction in entry fixture')
@@ -52,7 +58,18 @@ function Get-FiloWorkerState { Join-Path $global:FiloEntryRoot 'worker' }
     catch { $blocked=$_.Exception.Message -match 'as administrator' }
     Assert $blocked 'Non-admin installation must fail readably before reading private state'
     $global:FiloEntryAdmin=$true
-    'PASS: real installer entry handles zero and one discovered client in strict mode'
+    $statePath=Join-Path $fixture 'state'
+    New-Item -ItemType Directory -Path $statePath -Force | Out-Null
+    $savedSid='S-1-5-21-1-2-3-1001'
+    [IO.File]::WriteAllText((Join-Path $statePath 'config.json'),(@{
+        desktopSid=$savedSid; sources=@('codex-cli','claude-code'); bind='127.0.0.1';port=7435;workerTokenPath='fixture'
+    } | ConvertTo-Json))
+    function Get-ItemPropertyValue { param($LiteralPath,$Name) $fixture }
+    $global:FiloEntryClients=@()
+    $preserved=& (Join-Path $fixture 'Install-Filo.ps1') -ValidateOnly
+    Assert (($preserved.Sources -join ',') -eq 'codex-cli,claude-code') 'Upgrade without source options preserves saved sources even while native clients are unavailable'
+    Remove-Item -LiteralPath (Join-Path $statePath 'config.json')
+    'PASS: real installer entry handles zero/one sources, validation and saved-source upgrade preservation'
 } finally {
     $safe=Assert-FiloPrivatePath $fixture ([IO.Path]::GetTempPath())
     if(Test-Path -LiteralPath $safe){Remove-Item -LiteralPath $safe -Recurse -Force}

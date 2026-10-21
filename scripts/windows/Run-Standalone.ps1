@@ -17,6 +17,7 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
     $config = Get-Content -LiteralPath (Join-Path $StateDirectory 'launch.json') -Raw | ConvertFrom-Json
     try {
         if ($Role -eq 'Host') {
+            if ($config.PSObject.Properties['sources'] -and @($config.sources) -notcontains 'codex-desktop') { exit 0 }
             . (Join-Path $PSScriptRoot 'Desktop-Runtime.ps1')
             $sid = if ($config.desktopSid) { $config.desktopSid } else { [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
             $runtime = Resolve-FiloDesktopRuntime $sid

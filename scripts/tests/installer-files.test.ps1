@@ -105,7 +105,9 @@ try {
         'scripts\windows\Host-Lifecycle.ps1',
         'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Transaction.ps1',
         'scripts\windows\Uninstall-Transaction.ps1','scripts\windows\Service-State.ps1',
-        'scripts\windows\Run-Standalone.ps1','scripts\windows\Worker-Update.ps1','tools\nssm.exe','tools\FiloBackground.exe')) {
+        'scripts\windows\Run-Standalone.ps1','scripts\windows\Worker-Update.ps1','tools\nssm.exe','tools\FiloBackground.exe',
+        'scripts\windows\Source-Selection.ps1','internal\claude\mod\.claude-plugin\plugin.json',
+        'internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
         $file = Join-Path $bundle $relative
         New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
         [IO.File]::WriteAllText($file,'fixture - never executed')

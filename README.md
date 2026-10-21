@@ -10,9 +10,34 @@ not patch Codex, change its normal startup configuration, or automate the deskto
 
 ## Supported integration
 
-The implemented adapter is **Codex Desktop on Windows x64**. Install and sign in to
+The primary integration is **Codex Desktop on Windows x64**. Install and sign in to
 the original Desktop application; a separate Codex CLI installation is unnecessary.
-Claude Code, OpenCode and other adapters are not implemented yet.
+Two explicitly selected observation sources are also available: **Codex CLI** reads
+bounded native history for the selected Windows account, and **Claude Code** observes
+an opted-in official Mod. Both are read-only. They do not advertise Send, Stop,
+creation, settings or uploads. Claude history starts at Mod registration and is
+bounded; it is not a complete transcript. Other adapters remain unavailable.
+
+Private configuration selects one to three `sources`: `codex-desktop`, `codex-cli`
+and `claude-code`. Omitting the field preserves Desktop-only behavior. CLI-only or
+Claude-only workers do not connect the Desktop auxiliary host or allocate Desktop
+task executors. The selected Windows account remains `desktopSid` for compatibility.
+Optional `codexDaemonSocket` names an existing local socket; Filo never starts a
+CLI daemon. Daemon metadata remains disabled unless peer and actual native store
+identity are verified. Native history does not grant execution authority.
+
+Claude's private bridge defaults to `127.0.0.1:7438`, separate from the private
+worker on `7437` and encrypted public listener. The opted-in Mod receives one
+`FILO_CLAUDE_CONFIG` JSON value with `url` and an absolute `tokenFile`:
+
+```json
+{"url":"http://127.0.0.1:7438/claude-mod/v1/","tokenFile":"C:\\FiloWorker\\claude-mod-token"}
+```
+
+The token is a distinct private secret in the existing worker directory. Do not
+reuse the public service or private worker token. Filo does not edit Claude's
+native authentication, history or normal startup. Stopping the bridge releases
+Filo's observation transport and leaves the native session independent.
 
 | Capability | Behavior |
 | --- | --- |

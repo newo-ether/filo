@@ -167,7 +167,49 @@ if($Action -ne 'Restore' -or $RestoreStart){$global:FiloFixtureServiceState='Run
             }
         }
     }
-    "PASS: $caseCount install/update cases cover preflight, admission race, partial registration, authenticated startup and rollback with preserved credentials/endpoints/account/tasks"
+    foreach ($sourceSet in @(@('codex-cli'),@('claude-code'),@('codex-cli','claude-code'),@('codex-desktop','codex-cli','claude-code'))) {
+        $caseCount++
+        $failurePoint='none'
+        $caseRoot=Join-Path $fixture ('sources-'+($sourceSet -join '-'))
+        $runtime=Join-Path $caseRoot 'runtime'; $state=Join-Path $caseRoot 'service'; $worker=Join-Path $caseRoot 'worker'
+        New-Item -ItemType Directory -Path (Join-Path $runtime 'scripts'),(Join-Path $runtime 'tools'),$state,$worker -Force | Out-Null
+        [IO.File]::WriteAllText((Join-Path $runtime 'tools/nssm.exe'),'fixture - never executed')
+        [IO.File]::WriteAllText((Join-Path $runtime 'scripts/system-service.ps1'),@'
+param($Action,$RuntimeDirectory,$StateDirectory,$FiloPath,$WrapperPath,$RestoreApplication,$RestoreAppDirectory,$RestoreAppParameters,[switch]$RestoreStart)
+if($Action -eq 'Install' -and $global:FiloFixtureFailure -eq 'service'){throw 'Injected service failure'}
+$global:FiloFixtureService=$true; $global:FiloFixtureServiceState='Running'
+'@)
+        $global:FiloFixtureService=$false; $global:FiloFixtureServiceState='Stopped'; $global:FiloFixtureFailure='none'
+        $tasks=@{}; $restored=@{}; $events.Clear(); $script:candidateStopped=$false
+        $client=[pscustomobject]@{Sid='S-1-5-21-1-2-3-1001';Profile=$caseRoot;Name='Native sources fixture';Sources=$sourceSet}
+        Invoke-FiloInstall $runtime @{revision=('b'*40)} $caseRoot $state $worker $client '127.0.0.1' 23456 | Out-Null
+        $helper=Get-Content -Raw -LiteralPath (Join-Path $worker 'config.json') | ConvertFrom-Json
+        $gateway=Get-Content -Raw -LiteralPath (Join-Path $state 'config.json') | ConvertFrom-Json
+        $launch=Get-Content -Raw -LiteralPath (Join-Path $worker 'launch.json') | ConvertFrom-Json
+        Assert (($helper.sources -join ',') -eq ($sourceSet -join ',')) 'Worker persists exact selected sources'
+        Assert (($gateway.sources -join ',') -eq ($sourceSet -join ',') -and ($launch.sources -join ',') -eq ($sourceSet -join ',')) 'Gateway and launcher share selected sources'
+        Assert ($tasks.ContainsKey('Filo-Standalone-Host') -eq ($sourceSet -contains 'codex-desktop')) 'Only Desktop selection registers a native Host task'
+        if ($sourceSet -notcontains 'codex-desktop') {
+            Assert (-not $helper.PSObject.Properties['appServerUrl'] -and -not $launch.PSObject.Properties['appServerUrl']) 'CLI/Claude-only does not claim Desktop or auxiliary endpoint'
+            Assert (-not $events.Contains('start-task:Filo-Standalone-Host')) 'CLI/Claude-only never starts Host'
+        }
+        $modPath=Join-Path $worker 'claude-mod.json'
+        if ($sourceSet -contains 'claude-code') {
+            $modConfig=Get-Content -LiteralPath $modPath -Raw | ConvertFrom-Json
+            Assert ($modConfig.url -eq 'http://127.0.0.1:7438/claude-mod/v1/') 'Mod config uses frozen bridge prefix'
+            Assert ($modConfig.tokenFile -eq (Join-Path $worker 'claude-mod-token')) 'Mod uses the distinct selected-user token file'
+            Assert ([IO.File]::ReadAllText($modConfig.tokenFile) -ne [IO.File]::ReadAllText((Join-Path $state 'token'))) 'Mod token is not the public token'
+            $beforeMod=[IO.File]::ReadAllText($modPath)
+            $beforeToken=[IO.File]::ReadAllText($modConfig.tokenFile)
+            $global:FiloFixtureFailure='service'
+            $failurePoint='service'
+            $failed=$false
+            try { Invoke-FiloInstall $runtime @{revision=('c'*40)} $caseRoot $state $worker $client '127.0.0.1' 23456 | Out-Null } catch { $failed=$_.Exception.Message -match 'Injected' }
+            Assert $failed 'Failed multi-source upgrade is reported'
+            Assert ([IO.File]::ReadAllText($modPath) -ceq $beforeMod -and [IO.File]::ReadAllText($modConfig.tokenFile) -ceq $beforeToken) 'Failed upgrade preserves exact Mod config and token'
+        } else { Assert (-not (Test-Path -LiteralPath $modPath)) 'CLI-only never creates Mod config or token' }
+    }
+    "PASS: $caseCount install/update cases cover native source selection, preflight, admission race, partial registration, authenticated startup and rollback"
 } finally {
     $safe=Assert-FiloPrivatePath $fixture ([IO.Path]::GetTempPath())
     if(Test-Path -LiteralPath $safe){Remove-Item -LiteralPath $safe -Recurse -Force}

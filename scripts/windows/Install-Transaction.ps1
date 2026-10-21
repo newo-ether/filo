@@ -1,5 +1,6 @@
 . (Join-Path $PSScriptRoot 'Service-State.ps1')
 . (Join-Path $PSScriptRoot 'Worker-Update.ps1')
+. (Join-Path $PSScriptRoot 'Source-Selection.ps1')
 
 function Stop-FiloNewTasks {
     param([string]$Runtime,[string]$State,[string]$UserSid)
@@ -62,10 +63,27 @@ function Wait-FiloCandidateExit {
 }
 
 function Invoke-FiloInstall {
-    param([string]$Bundle,$Manifest,[string]$Root,[string]$State,[string]$Worker,$Client,[string]$Bind,[int]$Port)
+    param([string]$Bundle,$Manifest,[string]$Root,[string]$State,[string]$Worker,$Client,[string]$Bind,[int]$Port,$SourceOptions)
+    if (-not $SourceOptions) {
+        $sourceIds = if ($Client.PSObject.Properties['Sources']) { @($Client.Sources) } else { @('codex-desktop') }
+        $SourceOptions = Get-FiloSourceOptions $Worker $sourceIds '' $false 7438 $false $Port
+    }
+    $hasDesktop = $SourceOptions.Sources -contains 'codex-desktop'
+    $publicMode = if ($hasDesktop) { 'existing' } else { 'multi-source' }
+    $mode = if ($hasDesktop) { 'standalone' } else { 'multi-source' }
     Write-Host '1/4  Verify Filo and preserve the current installation' -ForegroundColor Cyan
     $configPath=Join-Path $State 'config.json'
     $endpoints=Get-FiloHelperEndpoints $Worker
+    $nativeUrl = if ($hasDesktop) {
+        if ($endpoints.NativeUrl) { $endpoints.NativeUrl } else { 'ws://127.0.0.1:7436' }
+    } else { '' }
+    if ($hasDesktop -and ([uri]$nativeUrl).Port -eq $endpoints.WorkerPort) { throw 'Native and worker ports must differ' }
+    $previousMode = 'standalone'
+    $previousConfigPath = Join-Path $Worker 'config.json'
+    if (Test-Path -LiteralPath $previousConfigPath) {
+        $priorConfig = Get-Content -LiteralPath $previousConfigPath -Raw | ConvertFrom-Json
+        if (@(Get-FiloConfiguredSources $priorConfig) -notcontains 'codex-desktop') { $previousMode = 'multi-source' }
+    }
     $wrapper=Join-Path $Root 'nssm.exe'
     $service=Get-CimInstance Win32_Service -Filter "Name='Filo'"
     if ($service -and ($service.StartName -ne 'LocalSystem' -or $service.PathName.Trim('"') -ine $wrapper)) {
@@ -74,7 +92,7 @@ function Invoke-FiloInstall {
     $previousParameters=if ($service) { Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\Filo\Parameters' }
     $serviceWasRunning=Test-FiloServiceShouldRun $service
     $snapshots=@{}
-    foreach ($file in @($configPath,(Join-Path $Worker 'config.json'),(Join-Path $Worker 'launch.json'))) {
+    foreach ($file in @($configPath,(Join-Path $Worker 'config.json'),(Join-Path $Worker 'launch.json'),(Join-Path $Worker 'claude-mod.json'))) {
         $snapshots[$file]=if (Test-Path -LiteralPath $file) { [IO.File]::ReadAllBytes($file) } else { $null }
     }
     $taskSnapshots=@{}
@@ -114,28 +132,47 @@ function Invoke-FiloInstall {
         New-FiloToken (Join-Path $Worker 'token')
         if (-not (Test-Path -LiteralPath $wrapper)) { Copy-Item -LiteralPath (Join-Path $runtime 'tools\nssm.exe') -Destination $wrapper }
         $workspace=if ($workerPlan) { $workerPlan.Launch.workspaceDirectory } else { $Client.Profile }
+        if ($SourceOptions.Sources -contains 'claude-code') { New-FiloToken (Join-Path $Worker 'claude-mod-token') }
         $launch=@{runtimeDirectory=$runtime;revision=$Manifest.revision;
-            desktopSid=$Client.Sid;workspaceDirectory=$workspace;appServerUrl=$endpoints.NativeUrl}
-        $configurationChanged=$true
-        Write-FiloJson (Join-Path $Worker 'launch.json') $launch
-        Write-FiloJson (Join-Path $Worker 'config.json') @{appServerUrl=$launch.appServerUrl;bind='127.0.0.1';port=$endpoints.WorkerPort;desktopSid=$Client.Sid}
-        Write-FiloJson $configPath @{bind=$Bind;port=$Port;desktopSid=$Client.Sid;
+            desktopSid=$Client.Sid;workspaceDirectory=$workspace;sources=@($SourceOptions.Sources)}
+        $workerConfig=@{bind='127.0.0.1';port=$endpoints.WorkerPort;desktopSid=$Client.Sid;sources=@($SourceOptions.Sources)}
+        $gatewayConfig=@{bind=$Bind;port=$Port;desktopSid=$Client.Sid;sources=@($SourceOptions.Sources);
             workerUrl=$endpoints.WorkerUrl;workerTokenPath=(Join-Path $Worker 'token')}
+        if ($hasDesktop) { $launch.appServerUrl=$nativeUrl; $workerConfig.appServerUrl=$nativeUrl }
+        foreach ($record in @($launch,$workerConfig,$gatewayConfig)) {
+            if ($SourceOptions.CodexDaemonSocket) { $record.codexDaemonSocket=$SourceOptions.CodexDaemonSocket }
+            if ($SourceOptions.Sources -contains 'claude-code') { $record.claudeBridgePort=$SourceOptions.ClaudeBridgePort }
+        }
+        $configurationChanged=$true
+        if ($SourceOptions.Sources -contains 'claude-code') {
+            Write-FiloJson (Join-Path $Worker 'claude-mod.json') @{
+                url=('http://127.0.0.1:' + $SourceOptions.ClaudeBridgePort + '/claude-mod/v1/')
+                tokenFile=(Join-Path $Worker 'claude-mod-token')
+            }
+        }
+        Write-FiloJson (Join-Path $Worker 'launch.json') $launch
+        Write-FiloJson (Join-Path $Worker 'config.json') $workerConfig
+        Write-FiloJson $configPath $gatewayConfig
         $tasksChanged=$true
-        Register-FiloUserTask 'Filo-Standalone-Host' (New-FiloTaskAction $runtime $Worker Host $workspace) $Client.Sid
+        if ($hasDesktop) {
+            Register-FiloUserTask 'Filo-Standalone-Host' (New-FiloTaskAction $runtime $Worker Host $workspace) $Client.Sid
+        } elseif ($hostPlan) {
+            Unregister-ScheduledTask -TaskName 'Filo-Standalone-Host' -Confirm:$false
+        }
         Register-FiloUserTask 'Filo-User-Agent' (New-FiloTaskAction $runtime $Worker Gateway $workspace) $Client.Sid
         $profile=Get-CimInstance Win32_UserProfile | Where-Object SID -eq $Client.Sid
         if ($profile.Loaded) {
-            foreach ($name in @('Filo-Standalone-Host','Filo-User-Agent')) { Start-ScheduledTask -TaskName $name }
-            Wait-FiloEndpoint $endpoints.WorkerUrl (Join-Path $Worker 'token') 'standalone' -Seconds 45
+            if ($hasDesktop) { Start-ScheduledTask -TaskName 'Filo-Standalone-Host' }
+            Start-ScheduledTask -TaskName 'Filo-User-Agent'
+            Wait-FiloEndpoint $endpoints.WorkerUrl (Join-Path $Worker 'token') $mode -Seconds 45
         }
         Write-Host '3/4  Install the independent SYSTEM gateway' -ForegroundColor Cyan
         $serviceChanged=$true
         & (Join-Path $runtime 'scripts\system-service.ps1') -Action Install -RuntimeDirectory $runtime -StateDirectory $State -FiloPath $filo -WrapperPath $wrapper
         Write-Host '4/4  Verify authenticated service readiness' -ForegroundColor Cyan
-        Wait-FiloEndpoint ("http://" + $Bind + ':' + $Port) (Join-Path $State 'token') 'existing' -FiloPath $filo
+        Wait-FiloEndpoint ("http://" + $Bind + ':' + $Port) (Join-Path $State 'token') $publicMode -FiloPath $filo
         Write-Output "Filo installed for $($Client.Name): http://${Bind}:$Port"
-        Write-Output "Access token: $State\token. No separate Codex CLI is needed."
+        Write-Output "Access token: $State\token. Configured sources: $($SourceOptions.Sources -join ', ')."
     } catch {
         $failure=$_
         $rollbackErrors=[Collections.Generic.List[string]]::new()
@@ -173,7 +210,7 @@ function Invoke-FiloInstall {
                 try {
                     Start-ScheduledTask -TaskName $entry.Name
                     if ($entry.Name -eq 'Filo-User-Agent') {
-                        Wait-FiloEndpoint $endpoints.WorkerUrl (Join-Path $Worker 'token') 'standalone' -Seconds 45
+                        Wait-FiloEndpoint $endpoints.WorkerUrl (Join-Path $Worker 'token') $previousMode -Seconds 45
                     }
                 }
                 catch { $rollbackErrors.Add("Restart $($entry.Name): $($_.Exception.Message)") }

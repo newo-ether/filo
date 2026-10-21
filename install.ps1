@@ -15,10 +15,14 @@ param(
     [switch]$ValidateOnly,
     [switch]$Uninstall,
     [string]$Bind,
+    [string]$CodexDaemonSocket,
+    [ValidateRange(1024,65535)][int]$ClaudeBridgePort = 7438,
+    [switch]$CopyClaudeMod,
+    [string]$ClaudeModDirectory,
     [ValidateRange(1024,65535)][int]$Port = 7435
 )
 $installerOptions = @{}
-foreach ($name in @('Clients','ListClients','ValidateOnly','Uninstall','Bind','Port')) {
+foreach ($name in @('Clients','ListClients','ValidateOnly','Uninstall','Bind','Port','CodexDaemonSocket','ClaudeBridgePort','CopyClaudeMod','ClaudeModDirectory')) {
     if ($PSBoundParameters.ContainsKey($name)) { $installerOptions[$name] = $PSBoundParameters[$name] }
 }
 if ($installerOptions.ContainsKey('Clients') -and
@@ -215,7 +219,7 @@ function Assert-FiloReleaseContents {
     Set-StrictMode -Version 2
     $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ($env:OS -ne 'Windows_NT' -or $architecture -ne 'AMD64') {
-        throw 'Filo currently supports Windows x64 with the original Codex Desktop.'
+        throw 'Filo currently supports Windows x64 with explicitly selected native sources.'
     }
     if ($ValidateOnly -and $Uninstall) { throw 'ValidateOnly cannot be combined with Uninstall.' }
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -242,7 +246,7 @@ function Assert-FiloReleaseContents {
         }
         Set-Acl -LiteralPath $stage -AclObject $acl
         Write-Host '  Filo Installer' -ForegroundColor Cyan
-        Write-Host '  Original Codex Desktop only; no Go, Node.js or separate CLI required.'
+        Write-Host '  Choose Codex Desktop, Codex CLI or Claude Code for one Windows account; no Go or Node.js required.'
         Write-Host '  [1/3] Finding the Windows release...' -ForegroundColor Cyan
         $tag = $Version
         if ($tag -eq 'latest') { $tag = Get-FiloLatestReleaseTag }

@@ -1,7 +1,6 @@
-# Read-only discovery and terminal selection. No client configuration is opened or changed.
+# Read-only discovery and selection of native sources under one Windows account.
 Set-StrictMode -Version 2
 . (Join-Path $PSScriptRoot 'Desktop-Identity.ps1')
-
 function Get-FiloClients {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $elevated = ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -16,59 +15,68 @@ function Get-FiloClients {
         $cliRoot = Join-Path $profile.LocalPath 'AppData\Local\OpenAI\Codex\bin'
         $cli = @(Get-ChildItem -LiteralPath $cliRoot -Directory -ErrorAction SilentlyContinue |
             ForEach-Object { Join-Path $_.FullName 'codex.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-        if ($applications.Count -or $cli.Count) {
-            $reason = if (-not $applications.Count) { 'Install and open the original Codex desktop for this account' }
-                elseif (-not $profile.Loaded) { 'Codex Desktop installed; sign in to this Windows account to connect' }
-                else { 'Codex Desktop installed; no separate CLI is required' }
+        if ($applications.Count) {
             [pscustomobject]@{
-                Id = 'codex:' + $profile.SID; Name = "Codex ($account)"; Supported = [bool]$applications.Count
-                RuntimeState = if ($applications.Count) { 'desktop-installed' } else { 'desktop-missing' }
-                Detail = $reason; Profile = $profile.LocalPath; Sid = $profile.SID; Account = $account
-                Desktop = if ($applications.Count) { $applications[0].Executable } else { $null }
-                CliCandidates = $cli
+                Id='codex-desktop:' + $profile.SID; Source='codex-desktop'; Name="Codex Desktop ($account)"; Supported=$true
+                RuntimeState='desktop-installed'; Detail='Original Desktop; existing task controls and history'
+                Profile=$profile.LocalPath; Sid=$profile.SID; Account=$account; Desktop=$applications[0].Executable; CliCandidates=$cli
             }
         }
-        foreach ($adapter in @(
-            @{ Id='claude-code'; Name='Claude Code'; Commands=@('.local\bin\claude.exe','AppData\Roaming\npm\claude.cmd'); Marker='.claude' },
-            @{ Id='opencode'; Name='OpenCode'; Commands=@('.opencode\bin\opencode.exe','AppData\Roaming\npm\opencode.cmd'); Marker='.config\opencode' }
-        )) {
-            $found = @( $adapter.Commands | ForEach-Object { Join-Path $profile.LocalPath $_ } |
-                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } )
-            if ($found.Count -or (Test-Path -LiteralPath (Join-Path $profile.LocalPath $adapter.Marker))) {
-                [pscustomobject]@{
-                    Id=$adapter.Id + ':' + $profile.SID; Name="$($adapter.Name) ($account)"; Supported=$false
-                    Detail='Detected; Filo adapter is not implemented'; Profile=$profile.LocalPath; Sid=$profile.SID
-                    Account=$account; Desktop=$null; CliCandidates=@()
-                }
+        if ($cli.Count -or (Test-Path -LiteralPath (Join-Path $profile.LocalPath '.codex') -PathType Container)) {
+            [pscustomobject]@{
+                Id='codex-cli:' + $profile.SID; Source='codex-cli'; Name="Codex CLI ($account)"; Supported=$true
+                RuntimeState='discovered'; Detail='Read-only native history; optional existing daemon metadata, no daemon startup'
+                Profile=$profile.LocalPath; Sid=$profile.SID; Account=$account; Desktop=$null; CliCandidates=$cli
+            }
+        }
+        $claude = @(@('.local\bin\claude.exe','AppData\Roaming\npm\claude.cmd') |
+            ForEach-Object { Join-Path $profile.LocalPath $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+        if ($claude.Count -or (Test-Path -LiteralPath (Join-Path $profile.LocalPath '.claude') -PathType Container)) {
+            [pscustomobject]@{
+                Id='claude-code:' + $profile.SID; Source='claude-code'; Name="Claude Code ($account)"; Supported=$true
+                RuntimeState='discovered'; Detail='Read-only live observation; requires explicitly loaded Filo Mod, no send or stop'
+                Profile=$profile.LocalPath; Sid=$profile.SID; Account=$account; Desktop=$null; CliCandidates=@()
             }
         }
     }
-    if (-not $profiles.Count) {
-        Write-Warning 'No signed-in desktop user was found. Sign in to the target Windows account and run discovery again.'
-    }
+    if (-not $profiles.Count) { Write-Warning 'No eligible Windows user profile was found.' }
 }
-
+function Get-FiloClientSource {
+    param($Client)
+    if ($Client.PSObject.Properties['Source']) { return [string]$Client.Source }
+    $prefix = $Client.Id.Split(':')[0]
+    if ($prefix -eq 'codex') { return 'codex-desktop' }
+    return $prefix
+}
 function Resolve-FiloSelection {
     param([object[]]$Clients, [string[]]$Ids)
-    $selected = @($Clients | Where-Object { $_.Id -in $Ids -or ($_.Id.Split(':')[0] -in $Ids) })
-    foreach ($id in $Ids) {
-        if (-not @($selected | Where-Object { $_.Id -eq $id -or $_.Id.Split(':')[0] -eq $id }).Count) {
-            throw "Client '$id' was not discovered. Run -ListClients to see available IDs."
-        }
+    $selected = @()
+    foreach ($requested in $Ids) {
+        $id = if ($requested -eq 'codex') { 'codex-desktop' }
+            elseif ($requested.StartsWith('codex:')) { 'codex-desktop:' + $requested.Substring(6) } else { $requested }
+        $matches = @($Clients | Where-Object {
+            $_.Id -eq $id -or (Get-FiloClientSource $_) -eq $id -or
+            ($_.Id -eq $requested -and (Get-FiloClientSource $_) -eq 'codex-desktop')
+        })
+        if (-not $matches.Count) { throw "Client '$requested' was not discovered. Run -ListClients to see available IDs." }
+        $selected += $matches
     }
+    $selected = @($selected | Sort-Object Id -Unique)
     if (-not $selected.Count) { return @() }
     if (@($selected | Where-Object { -not $_.Supported }).Count) { throw 'An unsupported client cannot be installed.' }
-    if ($selected.Count -gt 1) { throw 'This package supports one Codex desktop account. Select its full client ID.' }
+    $sids = @($selected | ForEach-Object {
+        if ($_.PSObject.Properties['Sid']) { $_.Sid } else { $_.Id.Substring($_.Id.IndexOf(':') + 1) }
+    } | Select-Object -Unique)
+    if ($sids.Count -ne 1) { throw 'Choose native sources belonging to the same Windows account. Use full client IDs to disambiguate.' }
     return $selected
 }
-
 function Select-FiloClients {
     param([object[]]$Clients)
-    if (-not $Clients.Count) { throw 'No clients found. Install and open a supported Codex desktop, then try again.' }
+    if (-not $Clients.Count) { throw 'No supported native sources found. Install or open the intended native client, then discover again.' }
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
         throw 'Interactive selection needs a terminal. Use -ListClients, then -Clients <id> for unattended installation.'
     }
-    Write-Host 'Select clients' -ForegroundColor Cyan
+    Write-Host 'Select sources from one Windows account' -ForegroundColor Cyan
     Write-Host '  Up/Down: move   Space: check/uncheck   Enter: install   Esc: cancel'
     Write-Host ''
     $origin = $Host.UI.RawUI.CursorPosition

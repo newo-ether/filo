@@ -32,6 +32,9 @@ function Get-FiloWorkerState {
     Join-Path $global:FiloLockRoot 'worker'
 }
 '@)
+    [IO.File]::WriteAllText((Join-Path $modules 'Source-Selection.ps1'),@'
+function Get-FiloSourceOptions { param($Worker,$Sources,$Socket,$SocketSpecified,$BridgePort,$BridgeSpecified,$PublicPort) [pscustomobject]@{Sources=$Sources;CodexDaemonSocket='';ClaudeBridgePort=7438} }
+'@)
     [IO.File]::WriteAllText((Join-Path $modules 'Installer-Tasks.ps1'),@'
 function Get-FiloInstallBind { param($Requested,$Existing) if($Requested){$Requested}else{$Existing} }
 '@)

@@ -107,7 +107,8 @@ foreach ($relative in @('README.md','LICENSE','THIRD_PARTY_NOTICES.txt','thirdpa
     'scripts\windows\Host-Lifecycle.ps1',
     'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Transaction.ps1',
     'scripts\windows\Uninstall-Transaction.ps1','scripts\windows\Service-State.ps1',
-    'scripts\windows\Desktop-Identity.ps1','scripts\windows\Client-Selection.ps1','scripts\windows\Install-Support.ps1','scripts\windows\Worker-Update.ps1','scripts\windows\Run-Standalone.ps1')) {
+    'scripts\windows\Desktop-Identity.ps1','scripts\windows\Client-Selection.ps1','scripts\windows\Source-Selection.ps1','scripts\windows\Install-Support.ps1','scripts\windows\Worker-Update.ps1','scripts\windows\Run-Standalone.ps1',
+    'internal\claude\mod\.claude-plugin\plugin.json','internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
     Copy-Payload (Join-Path $repo $relative) $relative
 }
 $binary = Join-Path $target 'tools\filo.exe'

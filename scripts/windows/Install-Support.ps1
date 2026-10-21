@@ -16,6 +16,14 @@ function Get-FiloHelperEndpoints {
     if (-not $hasLaunch -or -not $hasConfig) { throw 'Incomplete Filo helper configuration; existing state was preserved' }
     $launch = Get-Content -Raw -LiteralPath $launchPath | ConvertFrom-Json
     $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
+    $hasDesktop = -not $config.PSObject.Properties['sources'] -or @($config.sources) -contains 'codex-desktop'
+    if (-not $hasDesktop) {
+        if ($config.bind -ne '127.0.0.1' -or ($config.port -isnot [int] -and $config.port -isnot [long]) -or
+            $config.port -lt 1024 -or $config.port -gt 65535) { throw 'Invalid Filo worker endpoint' }
+        if (($launch.PSObject.Properties['appServerUrl'] -and $launch.appServerUrl) -or
+            ($config.PSObject.Properties['appServerUrl'] -and $config.appServerUrl)) { throw 'Non-Desktop helper must not claim a native host endpoint' }
+        return [pscustomobject]@{NativeUrl='';WorkerUrl=('http://127.0.0.1:' + $config.port);WorkerPort=$config.port}
+    }
     # Early releases stored the authoritative endpoint only in config.json.
     # Admit that known launch shape without inventing a port or mutating state.
     $nativeUrl = if ($launch.PSObject.Properties['appServerUrl']) { $launch.appServerUrl }
@@ -67,7 +75,9 @@ function Get-FiloBundle {
         'scripts\windows\Host-Lifecycle.ps1',
         'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Transaction.ps1',
         'scripts\windows\Uninstall-Transaction.ps1','scripts\windows\Service-State.ps1',
-        'scripts\windows\Run-Standalone.ps1','scripts\windows\Worker-Update.ps1','tools\nssm.exe','tools\FiloBackground.exe')) {
+        'scripts\windows\Run-Standalone.ps1','scripts\windows\Worker-Update.ps1','tools\nssm.exe','tools\FiloBackground.exe',
+        'scripts\windows\Source-Selection.ps1','internal\claude\mod\.claude-plugin\plugin.json',
+        'internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
         if (-not $seen.ContainsKey([IO.Path]::GetFullPath((Join-Path $base $required)))) { throw "Incomplete bundle: $required" }
     }
     return $manifest
@@ -119,7 +129,7 @@ function Wait-FiloEndpoint {
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
     do {
         try {
-            if ($Mode -eq 'existing') {
+            if ($Mode -eq 'existing' -or $FiloPath) {
                 if (-not $FiloPath) { throw 'Encrypted public readiness requires the verified Filo binary' }
                 $response = & $FiloPath request -url $Url -token-file $TokenPath -timeout 2s | Out-String
                 if ($LASTEXITCODE -ne 0) { throw 'Encrypted Filo readiness failed' }

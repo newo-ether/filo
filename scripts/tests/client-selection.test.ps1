@@ -43,15 +43,20 @@ try {
     $fixtureVersion='100.2.3.4'; $fixturePublisher='2p2nqsd0c76g0'
     function Get-FileHash { throw 'Discovery must not pin native content hashes' }
     $found = @(Get-FiloClients)
-    Assert ($found.Count -eq 2) 'Ignore unloaded and service accounts'
-    Assert $found[0].Supported 'Future Codex versions are selectable'
-    Assert (-not $found[1].Supported) 'Detection alone must not claim Claude support'
+    Assert ($found.Count -eq 3) 'One source per native kind and account, not per process'
+    Assert (@($found | Where-Object Source -eq 'codex-desktop').Count -eq 1) 'Future Codex versions are selectable'
+    Assert (@($found | Where-Object Source -eq 'codex-cli').Count -eq 1) 'CLI history source is selectable without claiming Desktop'
+    Assert (@($found | Where-Object Source -eq 'claude-code')[0].Detail -match 'Read-only') 'Claude discovery discloses observation-only capability'
+    $all=@(Resolve-FiloSelection $found @('codex-desktop','codex-cli','claude-code'))
+    Assert ($all.Count -eq 3) 'Multiple native sources may share one account'
+    Assert (@(Resolve-FiloSelection $found @('codex:' + $fixtureSid))[0].Source -eq 'codex-desktop') 'Legacy Desktop SID alias remains valid'
     $fixtureVersion='1.0.0.0'
     Assert (@(Get-FiloClients)[0].Supported) 'Versions are not admission criteria'
     [IO.File]::WriteAllText("$fixture\app\resources\app.asar", 'updated application content')
     Assert (@(Get-FiloClients)[0].Supported) 'Updating native content does not block discovery'
     $fixturePublisher='different-publisher'
-    Assert (-not (@(Get-FiloClients)[0].Supported)) 'Wrong application identity is rejected'
+    Assert (@(Get-FiloClients | Where-Object Source -eq 'codex-desktop').Count -eq 0) 'Wrong application identity cannot claim Desktop'
+    Assert (@(Get-FiloClients | Where-Object Source -eq 'codex-cli').Count -eq 1) 'CLI-only remains available without Desktop'
     Assert ([IO.File]::ReadAllText("$fixture\cli\AppData\Local\OpenAI\Codex\bin\one\codex.exe") -eq 'not executed') 'Discovery preserves native files'
     $fixturePublisher='2p2nqsd0c76g0'
     Remove-Item -LiteralPath "$fixture\cli\AppData\Local\OpenAI\Codex\bin\one\codex.exe"
@@ -61,4 +66,4 @@ try {
     if (-not $resolved.StartsWith([IO.Path]::GetFullPath([IO.Path]::GetTempPath()), [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe fixture cleanup' }
     Remove-Item -LiteralPath $resolved -Recurse -Force
 }
-Write-Output 'PASS: 11 client discovery and selection checks'
+Write-Output 'PASS: native source discovery, same-account multiselect, Desktop aliases and read-only capability disclosure'

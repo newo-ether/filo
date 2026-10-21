@@ -19,7 +19,7 @@ $ErrorActionPreference='Stop'
 # Two fixtures are opt-in and never part of the default sweep: desktop-runtime needs an
 # interactive desktop account, and installer-lifecycle registers a temporary real service,
 # so it needs -FiloPath plus a service manager binary.
-$names = @('build-source-identity','client-selection','desktop-identity','hidden-runner','host-lifecycle',
+$names = @('build-source-identity','client-selection','source-selection','desktop-identity','hidden-runner','host-lifecycle',
     'installer-entry','installer-files','installer-locking','installer-task-stop','release-bootstrap',
     'installer-transaction','service-state','uninstall-transaction','worker-update')
 if ($Only) { $names = @($names | Where-Object { $Only -contains $_ }) }
