@@ -211,6 +211,60 @@ func TestDisconnectRejectsPendingAndReconnectOnlySendsNewRequest(t *testing.T) {
 	}
 }
 
+func TestBoundRequestCannotReconnectOrReachAReplacementDesktop(t *testing.T) {
+	client, messages, dials := fixture(t, time.Second, func(peer net.Conn, message Message) {
+		if text(message, "method") == "disconnect" {
+			_ = peer.Close()
+			return
+		}
+		_ = success(peer, message, nil)
+	})
+	if client.ConnectionGeneration() != 0 {
+		t.Fatal("An unopened transport acquired a generation")
+	}
+	if _, err := client.RequestOnConnection(context.Background(), 1, "stale", 1, nil, "owner"); err == nil || dials.Load() != 0 {
+		t.Fatal("A bound request opened a transport")
+	}
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := client.ConnectionGeneration()
+	if first == 0 {
+		t.Fatal("A verified connection has no generation")
+	}
+	if _, err := client.RequestOnConnection(context.Background(), first, "disconnect", 1, nil, "owner"); err == nil {
+		t.Fatal("A disconnected mutation was accepted")
+	}
+	if _, err := client.RequestOnConnection(context.Background(), first, "stale", 1, nil, "owner"); err == nil || dials.Load() != 1 {
+		t.Fatal("A bound request reconnected after owner loss")
+	}
+	if err := client.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := client.ConnectionGeneration()
+	if second <= first {
+		t.Fatal("Replacement transport reused its predecessor identity")
+	}
+	if _, err := client.RequestOnConnection(context.Background(), first, "stale", 1, nil, "owner"); err == nil {
+		t.Fatal("Old mutation reached a replacement transport")
+	}
+	if _, err := client.RequestOnConnection(context.Background(), second, "current", 1, nil, "owner"); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{"initialize", "disconnect", "initialize", "current"} {
+		if got := text(nextMessage(t, messages), "method"); got != method {
+			t.Fatalf("method = %q; want %q", got, method)
+		}
+	}
+	if len(messages) != 0 || dials.Load() != 2 {
+		t.Fatal("Stale mutation was sent or replayed")
+	}
+	client.Close()
+	if client.ConnectionGeneration() != 0 {
+		t.Fatal("Closed transport retained authority")
+	}
+}
+
 func TestConnectFailureIsCoalescedBackedOffAndTerminalCloseDoesNotDial(t *testing.T) {
 	var validation, dials atomic.Int32
 	failure := errors.New("identity rejected")

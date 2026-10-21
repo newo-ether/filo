@@ -43,6 +43,7 @@ type Client struct {
 	socket    *exchange
 	opening   *opening
 	connected bool
+	generation uint64
 	stopped   bool
 	failure   error
 	retryAt   time.Time
@@ -173,6 +174,7 @@ func (c *Client) initialize() error {
 		return errors.New("Desktop IPC is closed")
 	}
 	c.socket = x
+	c.generation++
 	c.mu.Unlock()
 	go x.readLoop()
 	go x.writeLoop()
@@ -207,6 +209,31 @@ func (c *Client) Request(ctx context.Context, method string, version int, params
 	c.mu.Unlock()
 	if x == nil {
 		return nil, errors.New("Original desktop is unavailable")
+	}
+	return x.call(ctx, method, version, params, targetClientID)
+}
+
+// ConnectionGeneration identifies this exact admitted transport. Disconnection
+// removes authority immediately, including while another connection is opening.
+func (c *Client) ConnectionGeneration() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.connected || c.stopped || c.socket == nil {
+		return 0
+	}
+	return c.generation
+}
+
+// RequestOnConnection never connects or migrates an admitted mutation. A socket
+// replacement cannot receive a request carrying the previous generation.
+func (c *Client) RequestOnConnection(ctx context.Context, generation uint64, method string,
+	version int, params any, targetClientID string) (Message, error) {
+	c.mu.Lock()
+	x := c.socket
+	valid := generation != 0 && c.generation == generation && c.connected && !c.stopped && x != nil
+	c.mu.Unlock()
+	if !valid {
+		return nil, errors.New("Original desktop connection changed; refresh before continuing")
 	}
 	return x.call(ctx, method, version, params, targetClientID)
 }
