@@ -76,6 +76,14 @@ func DialWebSocket(ctx context.Context, rawURL string, headers http.Header, time
 	if timeout > 0 {
 		_ = conn.SetDeadline(time.Now().Add(timeout))
 	}
+	return handshakeWebSocket(ctx, conn, endpoint, headers)
+}
+
+// handshakeWebSocket upgrades a disposable, already authenticated connection.
+// TCP and verified local daemon sockets use the same framing and handshake.
+func handshakeWebSocket(ctx context.Context, conn net.Conn, endpoint *url.URL, headers http.Header) (*WebSocket, error) {
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	key, err := webSocketKey()
 	if err != nil {
 		_ = conn.Close()
@@ -119,6 +127,14 @@ func DialWebSocket(ctx context.Context, rawURL string, headers http.Header, time
 		response.Header.Get("Sec-WebSocket-Accept") != webSocketAccept(key) {
 		_ = conn.Close()
 		return nil, errors.New("Invalid WebSocket handshake")
+	}
+	if !stop() {
+		_ = conn.Close()
+		return nil, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		_ = conn.Close()
+		return nil, err
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return &WebSocket{conn: conn, reader: reader, client: true, limit: maxWebSocketMessageBytes}, nil

@@ -82,10 +82,7 @@ func ConnectCodexHost(ctx context.Context, rawURL string, options HostOptions) (
 	if err != nil {
 		return nil, codexConnectFailure(err)
 	}
-	host := &CodexHost{socket: socket}
-	host.inputReader, host.inputWriter = io.Pipe()
-	host.Rpc = NewRpc(host.inputReader, &hostWriter{socket: socket})
-	go host.pumpInput()
+	host := newCodexSocketHost(socket)
 	params := map[string]any{
 		"clientInfo": map[string]any{
 			"name": "filo", "title": "Filo", "version": codexHostClientVersion,
@@ -107,10 +104,20 @@ func ConnectCodexHost(ctx context.Context, rawURL string, options HostOptions) (
 	return host, nil
 }
 
+func newCodexSocketHost(socket *WebSocket) *CodexHost {
+	host := &CodexHost{socket: socket}
+	host.inputReader, host.inputWriter = io.Pipe()
+	host.Rpc = NewRpc(host.inputReader, &hostWriter{socket: socket})
+	go host.pumpInput()
+	return host
+}
+
 // Close ends this client's transport. It never waits for a peer close handshake,
 // and it is safe to call repeatedly and alongside a peer disconnect.
 func (h *CodexHost) Close() {
 	h.closeOnce.Do(func() {
+		// Interrupt an in-flight socket write before waiting for its write lock.
+		_ = h.socket.conn.Close()
 		h.Rpc.Close()
 		h.socket.Terminate()
 		_ = h.inputWriter.Close()
