@@ -198,7 +198,7 @@ func (worker *UserWorker) call(ctx context.Context, path string, input any) (jso
 	}
 	request.Header.Set("Authorization", authorization)
 	writeIdleRecoveryHeader(request, ctx)
-	if path == "/v1/sessions" {
+	if path == "/v1/sessions" || path == "/v1/adapters/codex-desktop/sessions" {
 		if trace := createTraceID(ctx); createTracePattern.MatchString(trace) {
 			request.Header.Set(createTraceHeader, trace)
 		}
@@ -314,7 +314,16 @@ func (worker *UserWorker) Create(ctx context.Context, text, clientID string,
 	if object := createSettingsObject(settings); object != nil {
 		payload["settings"] = object
 	}
-	raw, err := worker.call(ctx, "/v1/sessions", payload)
+	path := "/v1/sessions"
+	if scope := protocol.NativeScopeID(ctx); scope != "" {
+		payload["nativeScopeId"] = scope
+		path = "/v1/adapters/codex-desktop/sessions"
+	}
+	if err := protocol.ValidateScope(ctx); err != nil {
+		recordCreateStage(ctx, createStageSystemForwardFailed, err)
+		return protocol.Session{}, protocol.SendReceipt{}, err
+	}
+	raw, err := worker.call(ctx, path, payload)
 	if err != nil {
 		recordCreateStage(ctx, createStageSystemForwardFailed, err)
 		return protocol.Session{}, protocol.SendReceipt{}, err

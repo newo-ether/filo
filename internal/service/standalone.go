@@ -110,9 +110,26 @@ func serveStandalone(options standaloneOptions, latch *exitLatch, gateway *stand
 		return err
 	}
 	appServerURL, isText := config["appServerUrl"].(string)
+	ids, err := configuredSources(config)
+	if err != nil {
+		return err
+	}
+	desktopEnabled := hasConfiguredSource(ids, codexDesktopSource)
+	sid, _ := config["desktopSid"].(string)
+	if _, supplied := config["desktopSid"]; supplied {
+		if !systemServiceSIDPattern.MatchString(sid) {
+			return errors.New(systemServiceSIDRefusal)
+		}
+		if err := verifySourceUser(sid); err != nil {
+			return err
+		}
+	}
 	bind, port, admitted := readEntryBinding(config)
-	if !isText || !admitted || bind != "127.0.0.1" {
+	if (desktopEnabled && !isText) || !admitted || bind != "127.0.0.1" {
 		return errors.New(standaloneBindRefusal)
+	}
+	if err := validateSourceEndpoints(config, ids, port); err != nil {
+		return err
 	}
 	token, err := readEntryText(filepath.Join(directory, entryTokenName))
 	if err != nil {
@@ -128,43 +145,74 @@ func serveStandalone(options standaloneOptions, latch *exitLatch, gateway *stand
 	// The cancellation request is observed before HTTP is open, so a launcher
 	// that gave up on this gateway can always stop it.
 	go pollStandaloneCancellation(directory, latch, gateway)
-	connection, err := codex.ConnectCodexHost(context.Background(), appServerURL, codex.HostOptions{})
+	changes := &sourceChanges{}
+	assembly, err := assembleUserSources(config, directory, token, changes.changed)
 	if err != nil {
 		return err
 	}
-	gateway.setHost(connection)
-	if latch.stopping() {
-		connection.Close()
-		return errors.New(standaloneCancelledRefusal)
-	}
-	factory, err := NewTaskExecutorFactory(TaskExecutorFactoryOptions{
-		Directory: filepath.Join(directory, serviceTaskDirectoryName),
-		Workspace: processWorkingDirectory(),
-	})
-	if err != nil {
-		return err
-	}
-	metadata := codex.NewNativeMetadata(connection.Rpc)
-	sessions := NewTaskSessions(metadata,
-		history.NewNativeHistory(codexHome), factory)
-	gateway.setSessions(sessions)
-	connection.Rpc.SetHandlers(func(packet map[string]any) {
-		_ = connection.Rpc.RejectRequest(packet["id"], standaloneApprovalRefusal)
-	}, nil)
-	connection.Rpc.SetClosedHandler(func(error) {
-		if !latch.stopping() {
-			latch.stop(1, gateway.shutdown)
+	defer assembly.close()
+	var connection *codex.CodexHost
+	var surface *TaskSessions
+	var usage func(context.Context) (protocol.AccountUsage, error)
+	if desktopEnabled {
+		connection, err = codex.ConnectCodexHost(context.Background(), appServerURL, codex.HostOptions{})
+		if err != nil {
+			return err
 		}
-	})
+		gateway.setHost(connection)
+		if latch.stopping() {
+			connection.Close()
+			return errors.New(standaloneCancelledRefusal)
+		}
+		factory, err := NewTaskExecutorFactory(TaskExecutorFactoryOptions{
+			Directory: filepath.Join(directory, serviceTaskDirectoryName),
+			Workspace: processWorkingDirectory(),
+		})
+		if err != nil {
+			return err
+		}
+		metadata := codex.NewNativeMetadata(connection.Rpc)
+		home := codexHome
+		if sid != "" {
+			home = nativeHome(sid)
+		}
+		surface = NewTaskSessions(metadata,
+			history.NewNativeHistory(home), factory)
+		gateway.setSessions(surface)
+		usage = func(context.Context) (protocol.AccountUsage, error) { return metadata.Usage() }
+		if sid != "" {
+			desktop := privateDesktopAdapter(surface, codexSourceScope(sid, home, StaticUserWorkerToken(token)), usage)
+			assembly.adapters = orderedPrivateAdapters(ids, assembly.adapters, desktop)
+		}
+		connection.Rpc.SetHandlers(func(packet map[string]any) {
+			_ = connection.Rpc.RejectRequest(packet["id"], standaloneApprovalRefusal)
+		}, nil)
+		connection.Rpc.SetClosedHandler(func(error) {
+			if !latch.stopping() {
+				latch.stop(1, gateway.shutdown)
+			}
+		})
+	}
 	if latch.stopping() {
 		return errors.New(standaloneCancelledRefusal)
 	}
 	hub := NewHub()
-	sessions.SetChangedHandler(hub.Changed)
+	defer hub.Close()
+	if surface != nil {
+		surface.SetChangedHandler(func(id string) {
+			hub.Changed(id)
+			changes.changed(codexDesktopSource, id)
+		})
+	}
 	device, _ := os.Hostname()
+	var legacy SessionAPI
+	if surface != nil {
+		legacy = surface
+	}
 	server, err := NewServer(ServerOptions{
-		Sessions:         sessions,
-		Usage:            func(context.Context) (protocol.AccountUsage, error) { return metadata.Usage() },
+		Sessions:         legacy,
+		Adapters:         assembly.adapters,
+		Usage:            usage,
 		Token:            token,
 		Events:           hub,
 		OnShutdown:       func() { latch.stop(0, gateway.shutdown) },
@@ -174,6 +222,19 @@ func serveStandalone(options standaloneOptions, latch *exitLatch, gateway *stand
 	})
 	if err != nil {
 		return err
+	}
+	changes.set(server)
+	defer changes.set(nil)
+	if assembly.bridge != nil {
+		bridgeServer := &http.Server{Handler: assembly.bridge, ReadHeaderTimeout: entryHeaderTimeout,
+			ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 << 10}
+		bridgeListener, err := net.Listen("tcp", assembly.bridgeAddress)
+		if err != nil {
+			return err
+		}
+		defer bridgeListener.Close()
+		defer bridgeServer.Close()
+		go func() { _ = bridgeServer.Serve(bridgeListener) }()
 	}
 	httpServer := &http.Server{Handler: server, ReadHeaderTimeout: entryHeaderTimeout, MaxHeaderBytes: 16 << 10}
 	gateway.setServer(httpServer)

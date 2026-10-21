@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/newo-ether/filo/internal/desktop"
 	"github.com/newo-ether/filo/internal/history"
+	"github.com/newo-ether/filo/internal/protocol"
 	"github.com/newo-ether/filo/internal/sessions"
 	"github.com/newo-ether/filo/internal/uploads"
 	"github.com/newo-ether/filo/internal/windowsapp"
@@ -103,6 +105,11 @@ func serveSystemService(options systemServiceOptions) error {
 	if !admitted {
 		return errors.New(systemServiceBindRefusal)
 	}
+	ids, err := configuredSources(config)
+	if err != nil {
+		return err
+	}
+	desktopEnabled := hasConfiguredSource(ids, codexDesktopSource)
 	sid, _ := config["desktopSid"].(string)
 	if !systemServiceSIDPattern.MatchString(sid) {
 		return errors.New(systemServiceSIDRefusal)
@@ -119,69 +126,106 @@ func serveSystemService(options systemServiceOptions) error {
 		return errors.New(systemServiceCredentialRefusal)
 	}
 	workerURL, _ := config["workerUrl"].(string)
-	worker, err := NewUserWorker(workerURL, UserWorkerTokenFunc(func(context.Context) (string, error) {
-		return readEntryText(workerTokenPath)
-	}), metadata, filepath.Join(filepath.Dir(workerTokenPath), serviceTaskDirectoryName), DefaultUserWorkerTimeouts)
+	_, workerPortText, _ := net.SplitHostPort(strings.TrimPrefix(workerURL, "http://"))
+	workerPort, _ := strconv.Atoi(workerPortText)
+	if err := validateSourceEndpoints(config, ids, workerPort); err != nil {
+		return err
+	}
+	taskDirectory := ""
+	if desktopEnabled {
+		taskDirectory = filepath.Join(filepath.Dir(workerTokenPath), serviceTaskDirectoryName)
+	}
+	workerCredential := UserWorkerTokenFunc(func(context.Context) (string, error) { return readEntryText(workerTokenPath) })
+	worker, err := NewUserWorker(workerURL, workerCredential, metadata, taskDirectory, DefaultUserWorkerTimeouts)
 	if err != nil {
 		return err
 	}
-	attachments, err := uploads.New(filepath.Join(filepath.Dir(workerTokenPath), "uploads"))
-	if err != nil {
-		worker.Close()
-		return err
+	var attachments *uploads.Store
+	if desktopEnabled {
+		attachments, err = uploads.New(filepath.Join(filepath.Dir(workerTokenPath), "uploads"))
+		if err != nil {
+			worker.Close()
+			return err
+		}
+		defer attachments.Close()
 	}
-	defer attachments.Close()
 	hub := NewHub()
-	holder := &desktopSurface{}
-	pipePath := options.PipePath
-	if pipePath == "" {
-		pipePath = desktop.DefaultPipePath
-	}
-	client := desktop.NewClient(desktop.Options{
-		Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
-			connection, err := desktop.DialPipe(ctx, pipePath, func(verify context.Context, pid uint32) error {
-				if _, err := windowsapp.Inspect(verify, pid, sid); err != nil {
-					return errors.New(systemServiceDesktopUnavailable)
+	changes := &sourceChanges{}
+	var surface *sessions.DesktopSessions
+	var client *desktop.Client
+	var desktopAdapter Adapter
+	var legacy SessionAPI
+	var usage func(context.Context) (protocol.AccountUsage, error)
+	var status func() DesktopStatus
+	if desktopEnabled {
+		holder := &desktopSurface{}
+		pipePath := options.PipePath
+		if pipePath == "" {
+			pipePath = desktop.DefaultPipePath
+		}
+		client = desktop.NewClient(desktop.Options{
+			Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
+				connection, err := desktop.DialPipe(ctx, pipePath, func(verify context.Context, pid uint32) error {
+					if _, err := windowsapp.Inspect(verify, pid, sid); err != nil {
+						return errors.New(systemServiceDesktopUnavailable)
+					}
+					return nil
+				})
+				if err != nil {
+					return nil, errors.New(systemServiceDesktopUnavailable)
 				}
-				return nil
-			})
-			if err != nil {
-				return nil, errors.New(systemServiceDesktopUnavailable)
-			}
-			return connection, nil
-		},
-		Timeout: systemServiceDesktopTimeout,
-		OnBroadcast: func(message desktop.Message) {
-			if surface := holder.get(); surface != nil {
-				surface.Receive(message)
-			}
-		},
-		OnClosed: func() {
-			if surface := holder.get(); surface != nil {
-				surface.Disconnected()
-			}
-		},
-	})
-	var created sessions.CreatedReader
-	if tasks := worker.NewTasks(); tasks != nil {
-		created = createdScope{tasks: tasks}
+				return connection, nil
+			},
+			Timeout: systemServiceDesktopTimeout,
+			OnBroadcast: func(message desktop.Message) {
+				if surface := holder.get(); surface != nil {
+					surface.Receive(message)
+				}
+			},
+			OnClosed: func() {
+				if surface := holder.get(); surface != nil {
+					surface.Disconnected()
+				}
+			},
+		})
+		var created sessions.CreatedReader
+		if tasks := worker.NewTasks(); tasks != nil {
+			created = createdScope{tasks: tasks}
+		}
+		scope := codexSourceScope(sid, nativeHome(sid), workerCredential)
+		surface = sessions.New(sessions.Options{
+			IPC:     client,
+			History: worker,
+			Base:    worker,
+			Created: created,
+			Hooks: sessions.Hooks{Changed: func(id string) {
+				hub.Changed(id)
+				changes.changed(codexDesktopSource, id)
+			}, Closed: hub.Reset},
+			AccessScope:       scope,
+			AccessBinding:     protocol.AccessBinding,
+			WithAccessBinding: protocol.WithAccessBinding,
+		})
+		holder.set(surface)
+		worker.SetChangedHandler(surface.SourceChanged)
+		legacy, usage = surface, worker.Usage
+		status = func() DesktopStatus {
+			go func() { _ = client.Connect(context.Background()) }()
+			return desktopStatusOf(client.ConnectionStatus())
+		}
+		desktopAdapter = desktopSourceAdapter(surface, scope, status, usage, attachments)
 	}
-	surface := sessions.New(sessions.Options{
-		IPC:     client,
-		History: worker,
-		Base:    worker,
-		Created: created,
-		Hooks:   sessions.Hooks{Changed: hub.Changed, Closed: hub.Reset},
-	})
-	holder.set(surface)
-	worker.SetChangedHandler(surface.SourceChanged)
-
+	adapters := gatewaySourceAdapters(ids, worker, changes.changed, desktopAdapter)
 	var httpServer *http.Server
 	shutdown := func() {
 		hub.Close()
-		surface.Close()
+		if surface != nil {
+			surface.Close()
+		}
 		worker.Close()
-		client.Close()
+		if client != nil {
+			client.Close()
+		}
 		if httpServer != nil {
 			closeContext, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -191,24 +235,22 @@ func serveSystemService(options systemServiceOptions) error {
 	}
 	latch := newExitLatch()
 	server, err := NewPublicServer(ServerOptions{
-		Sessions:      surface,
+		Sessions:      legacy,
+		Adapters:      adapters,
 		Uploads:       attachments,
-		Usage:         worker.Usage,
+		Usage:         usage,
 		Token:         token,
 		Events:        hub,
 		OnShutdown:    func() { latch.stop(0, shutdown) },
 		CreateLogPath: filepath.Join(options.Directory, createSystemLogName),
-		DesktopStatus: func() DesktopStatus {
-			// Discovery is asynchronous. Desktop absence must never block service
-			// health, so the request only starts one attempt.
-			go func() { _ = client.Connect(context.Background()) }()
-			return desktopStatusOf(client.ConnectionStatus())
-		},
+		DesktopStatus: status,
 	})
 	if err != nil {
 		shutdown()
 		return err
 	}
+	changes.set(server.Server)
+	defer changes.set(nil)
 	httpServer = &http.Server{Handler: server, ReadHeaderTimeout: entryHeaderTimeout, MaxHeaderBytes: 16 << 10}
 	listener, err := net.Listen("tcp", net.JoinHostPort(bind, strconv.Itoa(port)))
 	if err != nil {
@@ -217,10 +259,14 @@ func serveSystemService(options systemServiceOptions) error {
 	}
 	go func() { _ = httpServer.Serve(listener) }()
 	device, _ := os.Hostname()
+	mode := "desktop-ipc"
+	if !desktopEnabled {
+		mode = "sources"
+	}
 	writeEntryRecord(options.Output, systemServiceReady{
 		Service: "Filo",
 		Device:  device,
-		Mode:    "desktop-ipc",
+		Mode:    mode,
 		Port:    port,
 		Build:   currentBuildInfo("gateway"),
 	})
