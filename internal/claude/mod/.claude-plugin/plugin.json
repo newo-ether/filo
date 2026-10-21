@@ -1,0 +1,5 @@
+{
+  "name": "filo-observer",
+  "version": "0.1.0",
+  "description": "Opt-in read-only Filo bridge for native Claude Code session events"
+}

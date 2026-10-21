@@ -1,0 +1,262 @@
+package claude
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/newo-ether/filo/internal/protocol"
+)
+
+type registerRequest struct {
+	SessionID string `json:"sessionId"`
+	Instance  string `json:"instance"`
+	Cwd       string `json:"cwd"`
+	Origin    string `json:"origin"`
+	Version   string `json:"version"`
+}
+
+type envelope struct {
+	SessionID string     `json:"sessionId"`
+	Nonce     string     `json:"nonce"`
+	Sequence  uint64     `json:"sequence,omitempty"`
+	Events    []modEvent `json:"events,omitempty"`
+}
+
+type modEvent struct {
+	Kind    string        `json:"kind"`
+	UUID    string        `json:"uuid,omitempty"`
+	Role    string        `json:"role,omitempty"`
+	Text    protocol.Text `json:"text,omitempty"`
+	TurnID  string        `json:"turnId,omitempty"`
+	Aborted bool          `json:"aborted,omitempty"`
+	// Lost rows are disclosed, never converted to invented message identities.
+	Dropped bool `json:"dropped,omitempty"`
+}
+
+type bridgeResponse struct {
+	Nonce           string `json:"nonce,omitempty"`
+	TTLMillis       int64  `json:"ttlMillis,omitempty"`
+	Sequence        uint64 `json:"sequence,omitempty"`
+	Commands        []any  `json:"commands,omitempty"`
+	ReadOnly        bool   `json:"readOnly"`
+	HistoryBoundary string `json:"historyBoundary"`
+	Error           string `json:"error,omitempty"`
+}
+
+// ServeHTTP must be mounted on the helper's distinct loopback listener. A public
+// mount still refuses non-loopback callers; its token is not the gateway bearer.
+func (a *Adapter) ServeHTTP(w http.ResponseWriter, request *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	host, _, err := net.SplitHostPort(request.RemoteAddr)
+	ip := net.ParseIP(host)
+	expected := "Bearer " + a.token
+	provided := request.Header.Get("Authorization")
+	if err != nil || ip == nil || !ip.IsLoopback() || request.Header.Get("Origin") != "" ||
+		len(provided) != len(expected) || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		a.respond(w, http.StatusUnauthorized, bridgeResponse{Error: "Unauthorized"})
+		return
+	}
+	if request.Method != http.MethodPost || !strings.HasPrefix(request.URL.Path, bridgePrefix) {
+		a.respond(w, http.StatusNotFound, bridgeResponse{Error: "Not found"})
+		return
+	}
+	path := strings.TrimPrefix(request.URL.Path, bridgePrefix)
+	if path == "register" {
+		var input registerRequest
+		if decodeRequest(request, &input) != nil {
+			a.respond(w, http.StatusBadRequest, bridgeResponse{Error: "Invalid registration"})
+			return
+		}
+		a.register(w, input)
+		return
+	}
+	var input envelope
+	if decodeRequest(request, &input) != nil || !nativeUUID.MatchString(input.SessionID) || !opaque.MatchString(input.Nonce) {
+		a.respond(w, http.StatusBadRequest, bridgeResponse{Error: "Invalid Mod envelope"})
+		return
+	}
+	if path != "pull" && path != "push" && path != "revoke" {
+		a.respond(w, http.StatusNotFound, bridgeResponse{Error: "Not found"})
+		return
+	}
+	a.mu.Lock()
+	r, err := a.findLocked(input.SessionID)
+	if err != nil || r.nonce != input.Nonce {
+		a.mu.Unlock()
+		a.respond(w, http.StatusConflict, bridgeResponse{Error: "Claude Mod registration changed"})
+		return
+	}
+	result := bridgeResponse{ReadOnly: true, TTLMillis: a.ttl.Milliseconds(), Sequence: r.sequence,
+		HistoryBoundary: HistoryBoundary}
+	status := http.StatusOK
+	switch path {
+	case "pull":
+		if len(input.Events) != 0 {
+			err = errors.New("Pull cannot include events")
+		} else {
+			r.expires = a.now().Add(a.ttl)
+		}
+		// Deliberately no command admission until native receipt/terminal proof.
+		result.Commands = []any{}
+	case "revoke":
+		delete(a.registrations, input.SessionID)
+	case "push":
+		err = a.pushLocked(r, input)
+		result.Sequence = r.sequence
+	}
+	if r.dropped {
+		result.HistoryBoundary = "observation-window-truncated"
+	}
+	if err != nil {
+		status = http.StatusConflict
+		result.Error = err.Error()
+	}
+	a.mu.Unlock()
+	if err == nil && path != "pull" {
+		a.changed(input.SessionID)
+	}
+	a.respond(w, status, result)
+}
+
+func decodeRequest(request *http.Request, target any) error {
+	data, err := io.ReadAll(io.LimitReader(request.Body, maxBody+1))
+	if err != nil || len(data) > maxBody || !utf8.Valid(data) {
+		return errors.New("Invalid bounded body")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return errors.New("Trailing JSON")
+	}
+	return nil
+}
+
+func (a *Adapter) respond(w http.ResponseWriter, status int, response bridgeResponse) {
+	if status == http.StatusOK && response.HistoryBoundary == "" {
+		response.ReadOnly = true
+		response.HistoryBoundary = HistoryBoundary
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (a *Adapter) register(w http.ResponseWriter, input registerRequest) {
+	if !nativeUUID.MatchString(input.SessionID) || !opaque.MatchString(input.Instance) ||
+		len(input.Cwd) > 4096 || len(input.Version) > 128 || (input.Origin != "terminal" && input.Origin != "desktop") {
+		a.respond(w, http.StatusBadRequest, bridgeResponse{Error: "Invalid native Mod identity"})
+		return
+	}
+	nonce, err := randomNonce()
+	if err != nil {
+		a.respond(w, http.StatusInternalServerError, bridgeResponse{Error: "Registration unavailable"})
+		return
+	}
+	a.mu.Lock()
+	a.pruneLocked()
+	old := a.registrations[input.SessionID]
+	if old != nil && old.instance != input.Instance || old == nil && len(a.registrations) >= maxSessions {
+		a.mu.Unlock()
+		a.respond(w, http.StatusConflict, bridgeResponse{Error: "Native session already registered or bridge is full"})
+		return
+	}
+	// Every registration rotates scope, including reconnect/reload. No account
+	// proof is available to coalesce identities across registrations.
+	a.registrations[input.SessionID] = &registration{nativeID: input.SessionID, nonce: nonce,
+		instance: input.Instance, canonical: a.canonical(input.SessionID, nonce), cwd: input.Cwd,
+		origin: input.Origin, version: input.Version, expires: a.now().Add(a.ttl), updated: a.now(), status: "unknown"}
+	a.mu.Unlock()
+	a.changed(input.SessionID)
+	a.respond(w, http.StatusOK, bridgeResponse{Nonce: nonce, TTLMillis: a.ttl.Milliseconds(),
+		ReadOnly: true, HistoryBoundary: HistoryBoundary})
+}
+
+func (a *Adapter) pushLocked(r *registration, input envelope) error {
+	if len(input.Events) == 0 || len(input.Events) > maxEvents {
+		return errors.New("Invalid bounded event batch")
+	}
+	data, _ := json.Marshal(input.Events)
+	digest := sha256.Sum256(data)
+	if input.Sequence == r.sequence && input.Sequence != 0 && digest == r.lastDigest {
+		return nil
+	}
+	if input.Sequence != r.sequence+1 {
+		return errors.New("Mod event sequence changed")
+	}
+	for _, event := range input.Events {
+		if err := validateEvent(event); err != nil {
+			return err
+		}
+	}
+	// Apply a validated batch atomically, including duplicate UUID validation.
+	working := *r
+	working.rows = append([]observedRow(nil), r.rows...)
+	for _, event := range input.Events {
+		switch event.Kind {
+		case "row":
+			if err := a.appendLocked(&working, event); err != nil {
+				return err
+			}
+		case "start":
+			working.activeTurn, working.status = event.TurnID, "active"
+		case "complete":
+			if working.activeTurn == event.TurnID {
+				working.activeTurn, working.completedTurn, working.status = "", event.TurnID, "idle"
+			}
+		case "gap":
+			working.dropped, working.status = true, "unknown"
+		case "busy":
+			working.status = "unknown"
+		}
+	}
+	working.sequence, working.lastDigest, working.updated, working.expires = input.Sequence, digest, a.now(), a.now().Add(a.ttl)
+	*r = working
+	return nil
+}
+
+func validateEvent(e modEvent) error {
+	switch e.Kind {
+	case "row":
+		if !nativeUUID.MatchString(e.UUID) || (e.Role != "user" && e.Role != "assistant") || len(e.Text) > maxRowBytes || e.TurnID != "" {
+			return errors.New("Native row UUID/role/bound required; no inferred row turn")
+		}
+	case "start", "complete":
+		if !opaque.MatchString(e.TurnID) {
+			return errors.New("Native turn identity required")
+		}
+	case "gap", "busy":
+	default:
+		return errors.New("Unsupported Mod event")
+	}
+	return nil
+}
+
+func (a *Adapter) appendLocked(r *registration, e modEvent) error {
+	for _, row := range r.rows {
+		if row.UUID == e.UUID {
+			if row.Role != e.Role || row.Text != e.Text {
+				return errors.New("Native row UUID content changed")
+			}
+			return nil
+		}
+	}
+	r.rows = append(r.rows, observedRow{UUID: e.UUID, Role: e.Role, Text: e.Text})
+	r.rowBytes += len(e.Text)
+	for len(r.rows) > maxRows || r.rowBytes > maxSessionBytes {
+		r.rowBytes -= len(r.rows[0].Text)
+		r.rows = r.rows[1:]
+		r.dropped = true
+	}
+	return nil
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Official Mod event observer; no terminal input, send or abort commands",
+  "modules": ["./register.js"]
+}
