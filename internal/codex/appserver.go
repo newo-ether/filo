@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/newo-ether/filo/internal/nativejson"
 )
 
 // codexHostClientVersion is the clientInfo version Filo reports to the shared
@@ -49,6 +51,8 @@ type HostOptions struct {
 type CodexHost struct {
 	// Rpc is the JSONL transport the caller drives.
 	Rpc *Rpc
+	// CodexHome is reported by the authenticated native initialize handshake.
+	CodexHome string
 
 	inputReader *io.PipeReader
 	inputWriter *io.PipeWriter
@@ -89,10 +93,13 @@ func ConnectCodexHost(ctx context.Context, rawURL string, options HostOptions) (
 		},
 		"capabilities": map[string]any{"experimentalApi": true},
 	}
-	if _, err := host.Rpc.RequestTimeout("initialize", params, codexHostRemaining(deadline, codexHostDefaultInitializeTimeout)); err != nil {
+	initialized, err := host.Rpc.RequestTimeout("initialize", params, codexHostRemaining(deadline, codexHostDefaultInitializeTimeout))
+	if err != nil {
 		host.Close()
 		return nil, err
 	}
+	fields, _ := nativejson.Fields(initialized)
+	host.CodexHome = nativejson.Text(fields["codexHome"])
 	if !deadline.IsZero() && !time.Now().Before(deadline) {
 		host.Close()
 		return nil, errors.New("Codex connection timed out")

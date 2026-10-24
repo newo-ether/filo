@@ -19,6 +19,7 @@ import (
 
 	"github.com/newo-ether/conch/encryptedhttp"
 	"github.com/newo-ether/filo/internal/protocol"
+	"github.com/newo-ether/filo/internal/uploads"
 )
 
 func TestAssemblyCodexIdentityMatchesDesktopCanonicalRule(t *testing.T) {
@@ -158,9 +159,9 @@ func TestAssemblyGatewaySourcesUsePrivateMetadataWithoutPerRowInfo(t *testing.T)
 		t.Fatal(err)
 	}
 	defer worker.Close()
-	adapters := gatewaySourceAdapters([]string{codexCLISource}, worker, func(string, string) {}, Adapter{})
-	if len(adapters) != 1 || worker.NewTasks() != nil || adapters[0].Capabilities.Create {
-		t.Fatal("CLI acquired Desktop resources")
+	adapters := gatewaySourceAdapters([]string{codexCLISource}, worker, func(string, string) {}, Adapter{}, nil)
+	if len(adapters) != 1 || worker.NewTasks() != nil || adapters[0].CapabilitySource == nil {
+		t.Fatal("CLI source did not retain an independent fresh private capability owner")
 	}
 	source := adapters[0].Sessions.(*userSource)
 	if _, err := source.scope(context.Background()); err != nil {
@@ -190,6 +191,29 @@ func TestAssemblyGatewaySourcesUsePrivateMetadataWithoutPerRowInfo(t *testing.T)
 	source.mu.Unlock()
 	if count != 0 {
 		t.Fatal("old account access cache survived fresh descriptor")
+	}
+}
+
+func TestAssemblyAttachmentsReachControlledSources(t *testing.T) {
+	store, err := uploads.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	worker, err := NewUserWorker("http://127.0.0.1:1", StaticUserWorkerToken(testToken), nil, "", DefaultUserWorkerTimeouts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer worker.Close()
+	ids := []string{codexCLISource, claudeCodeSource, claudeDesktopSource}
+	for _, adapter := range gatewaySourceAdapters(ids, worker, func(string, string) {}, Adapter{}, store) {
+		controlled := adapter.ID == codexCLISource || adapter.ID == claudeCodeSource
+		if adapter.Capabilities.Uploads != controlled || (adapter.Uploads == store) != controlled {
+			t.Fatalf("%s uploads=%v store=%v", adapter.ID, adapter.Capabilities.Uploads, adapter.Uploads != nil)
+		}
+		if adapter.Sessions.(*userSource).attachments != controlled {
+			t.Fatalf("%s private source attachment projection mismatch", adapter.ID)
+		}
 	}
 }
 
@@ -245,9 +269,10 @@ func TestAssemblyEncryptedGatewayWithoutDesktopDoesNotConnectAuxiliary(t *testin
 	if code := awaitEntryExit(t, done); code != 0 {
 		t.Fatal(code)
 	}
-	for _, path := range []string{"uploads", serviceTaskDirectoryName} {
-		if _, err := os.Stat(filepath.Join(directory, path)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("non-Desktop assembly created %s", path)
-		}
+	if _, err := os.Stat(filepath.Join(directory, "uploads")); err != nil {
+		t.Fatal("Claude-only gateway did not create its upload store", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, serviceTaskDirectoryName)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("Claude-only gateway created Desktop task ownership")
 	}
 }

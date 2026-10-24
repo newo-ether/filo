@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	codexDesktopSource = "codex-desktop"
-	codexCLISource     = "codex-cli"
-	claudeCodeSource   = "claude-code"
+	codexDesktopSource  = "codex-desktop"
+	codexCLISource      = "codex-cli"
+	claudeCodeSource    = "claude-code"
+	claudeDesktopSource = "claude-desktop"
 )
 
 // configuredSources keeps the original installation Desktop-only unless its
@@ -23,14 +24,14 @@ func configuredSources(config map[string]any) ([]string, error) {
 		return []string{codexDesktopSource}, nil
 	}
 	values, ok := raw.([]any)
-	if !ok || len(values) < 1 || len(values) > 3 {
-		return nil, errors.New("Expected one to three configured Filo sources")
+	if !ok || len(values) < 1 || len(values) > 4 {
+		return nil, errors.New("Expected one to four configured Filo sources")
 	}
 	seen := make(map[string]bool, len(values))
 	result := make([]string, 0, len(values))
 	for _, value := range values {
 		id, ok := value.(string)
-		if !ok || seen[id] || (id != codexDesktopSource && id != codexCLISource && id != claudeCodeSource) {
+		if !ok || seen[id] || (id != codexDesktopSource && id != codexCLISource && id != claudeCodeSource && id != claudeDesktopSource) {
 			return nil, errors.New("Invalid or duplicate configured Filo source")
 		}
 		seen[id] = true
@@ -83,7 +84,7 @@ func validateSourceEndpoints(config map[string]any, sources []string, workerPort
 			return err
 		}
 	}
-	if hasConfiguredSource(sources, claudeCodeSource) {
+	if hasConfiguredSource(sources, claudeCodeSource) || hasConfiguredSource(sources, claudeDesktopSource) {
 		address, err := configuredClaudeBridge(config)
 		if err != nil {
 			return err

@@ -19,6 +19,9 @@ func deploymentPath(segments ...string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if len(segments) > 0 && segments[0] == "tools" && filepath.Base(rootForExecutablePath(root)) == "bin" {
+		segments = append([]string{"bin"}, segments[1:]...)
+	}
 	return filepath.Join(append([]string{root}, segments...)...), nil
 }
 
@@ -38,10 +41,17 @@ func deploymentRoot() (string, error) {
 	return rootForExecutable(executable), nil
 }
 
-// Installed binaries live in tools; scripts and the guardian are siblings of tools.
+// Installed binaries live in bin; source bundles can still use tools.
+func rootForExecutablePath(root string) string {
+	if executable, err := os.Executable(); err == nil && rootForExecutable(executable) == root {
+		return filepath.Dir(executable)
+	}
+	return ""
+}
+
 func rootForExecutable(executable string) string {
 	directory := filepath.Dir(executable)
-	if filepath.Base(directory) == "tools" {
+	if filepath.Base(directory) == "tools" || filepath.Base(directory) == "bin" {
 		return filepath.Dir(directory)
 	}
 	return directory

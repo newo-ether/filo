@@ -178,7 +178,7 @@ func TestNativeTaskSessionSnapshotReportsTheNativeRuntime(t *testing.T) {
 	host := newSessionHost()
 	host.replies["thread/resume"] = sessionReply(map[string]any{})
 	host.replies["thread/read"] = sessionReply(map[string]any{"thread": map[string]any{
-		"id": "task", "model": "host-model", "reasoningEffort": "medium",
+		"id": "task", "name": "Native task title", "model": "host-model", "reasoningEffort": "medium",
 		"status": map[string]any{"type": "active"}}})
 	host.replies["filo/task/state"] = sessionReply(map[string]any{
 		"turn":    map[string]any{"id": "turn", "status": "inProgress"},
@@ -189,6 +189,10 @@ func TestNativeTaskSessionSnapshotReportsTheNativeRuntime(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	runtime := snapshot.Page.Runtime
+	if runtime == nil { t.Fatal("missing native runtime") }
+	if runtime.Title == nil || *runtime.Title != "Native task title" {
+		t.Fatalf("native title = %v", runtime.Title)
+	}
 	if runtime == nil || runtime.Status != "active" || runtime.ActiveTurnID == nil || *runtime.ActiveTurnID != "turn" {
 		t.Fatalf("the active runtime = %+v", runtime)
 	}

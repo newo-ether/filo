@@ -132,6 +132,7 @@ type nativeTaskSessionsConnection struct {
 	mu       sync.Mutex
 	ctx      context.Context
 	validate func(context.Context, string, string, any) error
+	state    func(string) (any, error)
 }
 
 func (c *nativeTaskSessionsConnection) Request(method string, params any) (any, error) {
@@ -157,6 +158,10 @@ func (c *nativeTaskSessionsConnection) RequestTimeout(method string, params any,
 		if err := protocol.ValidateScope(ctx); err != nil {
 			return nil, err
 		}
+	}
+	if method == "filo/task/state" && c.state != nil {
+		fields, _ := nativejson.Fields(params)
+		return c.state(nativejson.Text(fields["threadId"]))
 	}
 	return c.rpc.RequestTimeout(method, params, timeout)
 }
@@ -190,7 +195,11 @@ func (s *TaskSessions) bindTaskMutation(ctx context.Context, id string, entry *t
 }
 
 func (s *TaskSessions) taskNative(connection TaskSessionsConnection) *nativeTaskSessionsConnection {
-	return &nativeTaskSessionsConnection{rpc: connection.Transport()}
+	native := &nativeTaskSessionsConnection{rpc: connection.Transport()}
+	if state, ok := connection.(interface{ TaskState(string) (any, error) }); ok {
+		native.state = state.TaskState
+	}
+	return native
 }
 
 func (s *TaskSessions) registerTaskAccess(id string, entry *taskSessionsEntry) {

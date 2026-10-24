@@ -1,4 +1,4 @@
 {
-  "description": "Official Mod event observer; no terminal input, send or abort commands",
+  "description": "Official Mod observation and exact native turn abort; no terminal input or Send receipt inference",
   "modules": ["./register.js"]
 }

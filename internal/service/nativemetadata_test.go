@@ -61,3 +61,18 @@ func TestTaskMetadataKeepsNativeSettingsAndSupplementsPersistedTelemetry(t *test
 		t.Fatalf("Persisted and native receipt merge = %+v", page.InputReceipts)
 	}
 }
+
+func TestTaskMetadataRefreshesTitleWithoutMutatingNativeSnapshot(t *testing.T) {
+	stale, fresh := protocol.Text("Generated"), protocol.Text("Renamed")
+	live := protocol.ConversationPage{Runtime: &protocol.Runtime{Status: "idle", Title: &stale}}
+	page := protocol.ConversationPage{Runtime: &protocol.Runtime{Title: &fresh}}
+	mergeTaskMetadata(&page, live)
+	if page.Runtime.Title != &fresh || live.Runtime.Title != &stale {
+		t.Fatal("Fresh native metadata was lost or mutated the cached snapshot")
+	}
+	page.Runtime = &protocol.Runtime{}
+	mergeTaskMetadata(&page, live)
+	if page.Runtime.Title != &stale {
+		t.Fatal("Unavailable persisted title cleared native title")
+	}
+}

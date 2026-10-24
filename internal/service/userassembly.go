@@ -20,17 +20,28 @@ import (
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
-// userSourceAssembly owns only Filo's optional observation transports. Desktop's
-// auxiliary metadata client and task executors remain with standaloneGateway.
+// userSourceAssembly owns the optional selected-user source transports and
+// clients. Independent native brokers retain accepted execution on close.
 type userSourceAssembly struct {
 	adapters      []Adapter
 	cli           *codexcli.Adapter
+	cliControl    *CLIControlledSessions
+	claudeControl *ClaudeExecutorSessions
 	bridge        http.Handler
 	bridgeAddress string
 }
 
 func (a *userSourceAssembly) close() {
-	if a != nil && a.cli != nil {
+	if a == nil {
+		return
+	}
+	if a.claudeControl != nil {
+		a.claudeControl.Close()
+	}
+	if a.cliControl != nil {
+		a.cliControl.Close()
+	}
+	if a.cli != nil {
 		a.cli.Close()
 	}
 }
@@ -41,7 +52,7 @@ func assembleUserSources(config map[string]any, directory, token string, changed
 		return nil, err
 	}
 	assembly := &userSourceAssembly{}
-	if !hasConfiguredSource(ids, codexCLISource) && !hasConfiguredSource(ids, claudeCodeSource) {
+	if !hasConfiguredSource(ids, codexCLISource) && !hasConfiguredSource(ids, claudeCodeSource) && !hasConfiguredSource(ids, claudeDesktopSource) {
 		return assembly, nil
 	}
 	sid, _ := config["desktopSid"].(string)
@@ -51,6 +62,7 @@ func assembleUserSources(config map[string]any, directory, token string, changed
 	if err := verifySourceUser(sid); err != nil {
 		return nil, err
 	}
+	var claudeSurfaces []*claude.Adapter
 	for _, id := range ids {
 		switch id {
 		case codexCLISource:
@@ -81,16 +93,35 @@ func assembleUserSources(config map[string]any, directory, token string, changed
 				return nil, err
 			}
 			assembly.cli = cli
+			verifyMetadata := verifySourceDaemon(sid, home, StaticUserWorkerToken(token))
+			metadata := newCLISourceMetadata(scope, func(ctx context.Context, nativeHome string) error {
+				return verifyMetadata(ctx, codex.LocalDaemonIdentity{UserID: sid, CodexHome: nativeHome})
+			})
+			control, err := NewCLIControlledSessions(CLIControlledOptions{
+				Directory: directory, Workspace: processWorkingDirectory(), Reader: cli, Metadata: metadata,
+				History: history.NewNativeHistory(home), Scope: scope, NativeHome: home,
+				Daemon: existingCLIDaemon(socket, sid, home, verifyMetadata),
+				OnChange: func(session string) {
+					if changed != nil {
+						changed(id, session)
+					}
+				},
+			})
+			if err != nil {
+				assembly.close()
+				return nil, err
+			}
+			assembly.cliControl = control
 			assembly.adapters = append(assembly.adapters, Adapter{ID: id, Family: "codex", Origin: "cli",
-				Scope: scope, Sessions: &sourceReader{SessionAPI: cli, scope: scope}, Capabilities: sourceHistoryCaps(false),
+				Scope: scope, Sessions: &sourceReader{SessionAPI: control, scope: scope}, Capabilities: control.Capabilities(),
+				Usage: control.Usage,
 				Status: func() AdapterStatus {
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
-					status := cli.Status(ctx)
-					return sourceStatus(status.State, status.Reason)
+					return control.Status(ctx)
 				},
 			})
-		case claudeCodeSource:
+		case claudeCodeSource, claudeDesktopSource:
 			address, err := configuredClaudeBridge(config)
 			if err != nil {
 				assembly.close()
@@ -106,10 +137,14 @@ func assembleUserSources(config map[string]any, directory, token string, changed
 				assembly.close()
 				return nil, err
 			}
-			bridge, err := claude.New(claude.Config{Token: secret, NativeScopeID: scope,
+			origin, publicOrigin := "terminal", "cli"
+			if id == claudeDesktopSource {
+				origin, publicOrigin = "desktop", "desktop"
+			}
+			bridge, err := claude.New(claude.Config{Token: secret, NativeScopeID: scope, Origin: origin,
 				OnChange: func(session string) {
 					if changed != nil {
-						changed(claudeCodeSource, session)
+						changed(id, session)
 					}
 				},
 			})
@@ -117,15 +152,46 @@ func assembleUserSources(config map[string]any, directory, token string, changed
 				assembly.close()
 				return nil, err
 			}
-			assembly.bridge, assembly.bridgeAddress = bridge, address
-			assembly.adapters = append(assembly.adapters, Adapter{ID: id, Family: "claude", Origin: "cli",
-				NativeScopeID: scope, Sessions: bridge, Capabilities: claude.Capabilities(),
-				Status: func() AdapterStatus {
+			claudeSurfaces = append(claudeSurfaces, bridge)
+			assembly.bridgeAddress = address
+			var surface SessionAPI = bridge
+			caps := claude.Capabilities()
+			status := func() AdapterStatus {
+				value := bridge.Status()
+				return AdapterStatus{State: value.State, Error: value.Error}
+			}
+			if id == claudeCodeSource {
+				control, err := NewClaudeExecutorSessions(ClaudeExecutorOptions{
+					Directory: filepath.Join(directory, "claude-code-tasks"), Workspace: processWorkingDirectory(),
+					UploadDirectory: filepath.Join(directory, "uploads"),
+					NativeScopeID:   scope, ReadOnly: bridge,
+					OnChange: func(session string) {
+						if changed != nil {
+							changed(id, session)
+						}
+					},
+				})
+				if err != nil {
+					assembly.close()
+					return nil, err
+				}
+				assembly.claudeControl = control
+				surface, caps = control, control.Capabilities()
+				status = func() AdapterStatus {
 					value := bridge.Status()
-					return AdapterStatus{State: value.State, Error: value.Error}
-				},
+					if value.State == "connected" {
+						return AdapterStatus{State: value.State, Error: value.Error}
+					}
+					return control.Status()
+				}
+			}
+			assembly.adapters = append(assembly.adapters, Adapter{ID: id, Family: "claude", Origin: publicOrigin,
+				NativeScopeID: scope, Sessions: surface, Capabilities: caps, Status: status,
 			})
 		}
+	}
+	if len(claudeSurfaces) > 0 {
+		assembly.bridge = claude.SharedBridge(claudeSurfaces...)
 	}
 	return assembly, nil
 }

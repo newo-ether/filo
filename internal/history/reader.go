@@ -23,9 +23,9 @@ func (history *NativeHistory) Read(ctx context.Context, id, cursor string, activ
 	if err != nil {
 		return result, err
 	}
-	var threadID, path string
+	var threadID, path, title string
 	var model, effort *string
-	err = catalog.QueryRowContext(ctx, "SELECT id,rollout_path,model,reasoning_effort FROM threads WHERE id=?", id).Scan(&threadID, &path, &model, &effort)
+	err = catalog.QueryRowContext(ctx, "SELECT id,rollout_path,model,reasoning_effort,COALESCE(NULLIF(name,''),title,'') FROM threads WHERE id=?", id).Scan(&threadID, &path, &model, &effort, &title)
 	catalog.Close()
 	if errors.Is(err, sql.ErrNoRows) {
 		return result, &NativeTaskNotIndexed{TaskID: id}
@@ -95,6 +95,8 @@ func (history *NativeHistory) Read(ctx context.Context, id, cursor string, activ
 	if err != nil {
 		return result, err
 	}
+	nativeTitle := protocol.Text(title)
+	result.Runtime.Title = &nativeTitle
 	indexedReceipts, err := indexedInputReceipts(ctx, tx, id)
 	if err != nil {
 		return result, err

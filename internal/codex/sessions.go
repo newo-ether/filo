@@ -230,6 +230,21 @@ func (s *NativeTaskSession) ArchiveSession(id string) (string, error) {
 	return cwd, nil
 }
 
+// RenameSession renames one owned native task on this exact connection.
+func (s *NativeTaskSession) RenameSession(id, name string) (protocol.Session, error) {
+	session, err := s.metadata.Rename(id, name)
+	if err != nil {
+		return protocol.Session{}, err
+	}
+	s.mu.Lock()
+	changed := s.changed
+	s.mu.Unlock()
+	if changed != nil {
+		changed(id)
+	}
+	return session, nil
+}
+
 // Models reads the native model catalog of this exact connection.
 func (s *NativeTaskSession) Models() ([]protocol.Model, error) { return s.metadata.Models() }
 
@@ -247,16 +262,6 @@ type NativeTaskSnapshot struct {
 // presentation of its current turn. An identity that does not answer for the
 // requested task, and a task state that cannot be trusted, are both refused.
 func (s *NativeTaskSession) Snapshot(threadID string) (NativeTaskSnapshot, error) {
-	result, err := s.rpc.Request("thread/read", map[string]any{"threadId": threadID, "includeTurns": false})
-	if err != nil {
-		return NativeTaskSnapshot{}, err
-	}
-	fields, _ := nativejson.Fields(result)
-	thread, isObject := nativejson.Fields(fields["thread"])
-	threadIDNative, _ := nativejson.AsText(thread["id"])
-	if !isObject || threadIDNative != threadID {
-		return NativeTaskSnapshot{}, errors.New("Native task identity mismatch")
-	}
 	stateResult, err := s.rpc.Request("filo/task/state", map[string]any{"threadId": threadID})
 	if err != nil {
 		return NativeTaskSnapshot{}, err
@@ -274,6 +279,23 @@ func (s *NativeTaskSession) Snapshot(threadID string) (NativeTaskSnapshot, error
 	if !hasMaterialized || !hasHasUser || (presentTurn && (!hasTurnID || !hasTurnStatus)) {
 		return NativeTaskSnapshot{}, errors.New("Invalid executor task state")
 	}
+	// New executors expose the same-owner identity of an acknowledged turn.
+	// Its rollout can still be empty while native persistence catches up.
+	// Older executors and tasks with no observed turn retain the native read.
+	threadValue, liveIdentity := state["thread"]
+	if !liveIdentity {
+		result, err := s.rpc.Request("thread/read", map[string]any{"threadId": threadID, "includeTurns": false})
+		if err != nil {
+			return NativeTaskSnapshot{}, err
+		}
+		fields, _ := nativejson.Fields(result)
+		threadValue = fields["thread"]
+	}
+	thread, isObject := nativejson.Fields(threadValue)
+	threadIDNative, _ := nativejson.AsText(thread["id"])
+	if !isObject || threadIDNative != threadID {
+		return NativeTaskSnapshot{}, errors.New("Native task identity mismatch")
+	}
 	statusFields, _ := nativejson.Fields(thread["status"])
 	status := "notLoaded"
 	if text, ok := statusFields["type"].(string); ok {
@@ -285,6 +307,14 @@ func (s *NativeTaskSession) Snapshot(threadID string) (NativeTaskSnapshot, error
 	receipts := append([]protocol.InputReceipt(nil), s.receipts[threadID]...)
 	s.mu.Unlock()
 	runtime := protocol.Runtime{Status: status}
+	title := nativejson.Text(thread["name"])
+	if title == "" {
+		title = nativejson.Text(thread["preview"])
+	}
+	if title != "" {
+		value := protocol.Text(title)
+		runtime.Title = &value
+	}
 	if presentTurn {
 		runtime.CompletedTurnID = protocol.Known[*string](nil)
 	}

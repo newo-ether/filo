@@ -82,7 +82,6 @@ func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 		return err
 	}
 	previous := ""
-	awaitingNativeState := false
 	refresh := func() error {
 		page, err := s.streamPage(ctx, id, payloads, withBodies)
 		if err != nil {
@@ -100,7 +99,6 @@ func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 			flush()
 			return err
 		}
-		awaitingNativeState = streamNotLoaded(page)
 		if text != previous {
 			if _, err := io.WriteString(w, "data: "+text+"\n\n"); err != nil {
 				return err
@@ -136,9 +134,8 @@ func (s *Server) stream(ctx context.Context, w http.ResponseWriter, id string,
 			if err := flush(); err != nil {
 				return err
 			}
-			if !awaitingNativeState {
-				continue
-			}
+			// Refresh bounded native metadata as well: an idle rename need not
+			// emit a conversation notification. Unchanged snapshots stay silent.
 		}
 		if refresh() != nil {
 			return nil

@@ -302,12 +302,17 @@ func TestScopedReadOnlyHistoryCannotAdmitIdleRecovery(t *testing.T) {
 		f.history.read = func(context.Context, string, string, bool, []string) (protocol.ConversationPage, error) {
 			return protocol.ConversationPage{Runtime: &protocol.Runtime{Status: "idle"}}, nil
 		}
-		ctx := accessContext(t, f.sessions, "thread")
+		// A catalog/history-only binding cannot be promoted to recovery authority.
+		access, err := f.sessions.CatalogAccess(context.Background(), "thread")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx := protocol.WithAccessBinding(context.Background(), access.Binding)
 		if _, err := f.sessions.Send(ctx, "thread", "hello", "client"); err == nil {
 			t.Fatal("history-only binding allocated a recovered writer")
 		}
-		if created.admissions.Load() != 0 || f.history.reads.Load() != 0 {
-			t.Fatal("access discovery entered the idle recovery path")
+		if created.admissions.Load() != 0 {
+			t.Fatal("access discovery allocated a writer")
 		}
 		if _, err := f.sessions.Send(context.Background(), "thread", "legacy", "legacy"); err != nil || created.admissions.Load() != 1 {
 			t.Fatal("legacy explicit idle recovery regressed", err)

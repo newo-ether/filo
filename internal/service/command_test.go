@@ -12,7 +12,7 @@ import (
 // TestMainNamesEveryEntryPointInItsUsage pins the one line an operator reads
 // when a launch fails. A verb missing from it is a verb nobody can discover.
 func TestMainNamesEveryEntryPointInItsUsage(t *testing.T) {
-	for _, argument := range []string{executorRunnerArgument, systemServiceArgument, standaloneArgument, probeHostIdleArgument} {
+	for _, argument := range []string{executorRunnerArgument, ClaudeExecutorRunnerArgument, systemServiceArgument, standaloneArgument, probeHostIdleArgument, "request"} {
 		if !strings.Contains(commandUsage, argument) {
 			t.Fatalf("usage line %q does not name %q", commandUsage, argument)
 		}
@@ -31,6 +31,7 @@ func TestMainRefusesACallWithoutAnEntryPoint(t *testing.T) {
 	}{
 		{name: "no argument", arguments: nil},
 		{name: "unknown entry point", arguments: []string{"executor"}},
+		{name: "retired Codex wrapper", arguments: []string{"codex"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var diagnostic strings.Builder

@@ -10,6 +10,18 @@ at most 256 KiB and must carry the exact next offset. Completion verifies the en
 file digest before publishing an opaque receipt. Session input accepts receipt IDs,
 never caller-controlled target paths. Uploads are target-local original bytes;
 the native task receives file references, without extraction or conversion.
+Codex Desktop, Filo-owned Codex CLI tasks and attachment-enabled Filo-owned Claude
+Code sessions share this raw-byte contract. Claude Code receives the private upload
+directory through `--add-dir`, with native default permissions unchanged. An old
+broker without that grant never advertises upload access. Upgrades preserve its
+accepted work and route new attachment-enabled sessions to a separate broker;
+only explicit session absence permits routing to the old owner, never a timeout
+or an uncertain mutation result. Mod-observed Claude sessions do not gain uploads.
+Actual native file consumption is a separate qualification gate from capability
+and upload transport fixtures. Private workers preserve the native attachment
+permission even though only the public gateway owns upload storage. A public
+source requires both that native grant and its upload store; private upload routes
+without a store remain unavailable.
 A failed/incomplete upload must not start a native turn. Completed files survive a
 service restart. Private incomplete fragments expire or are discarded on restart.
 

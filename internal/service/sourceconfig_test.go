@@ -23,6 +23,8 @@ func TestConfiguredSourcesKeepLegacyDefaultAndExplicitOrder(t *testing.T) {
 	}{
 		{`{}`, []string{codexDesktopSource}},
 		{`{"sources":["claude-code"]}`, []string{claudeCodeSource}},
+		{`{"sources":["claude-desktop"]}`, []string{claudeDesktopSource}},
+		{`{"sources":["claude-desktop","codex-cli","codex-desktop","claude-code"]}`, []string{claudeDesktopSource, codexCLISource, codexDesktopSource, claudeCodeSource}},
 		{`{"sources":["codex-cli","codex-desktop","claude-code"]}`, []string{codexCLISource, codexDesktopSource, claudeCodeSource}},
 	} {
 		config := sourceConfigFixture(t, test.text)
@@ -42,8 +44,8 @@ func TestConfiguredSourcesRejectAmbiguousOrUnconfiguredFallbacks(t *testing.T) {
 	for _, text := range []string{
 		`{"sources":null}`, `{"sources":[]}`, `{"sources":"codex-cli"}`,
 		`{"sources":["codex-cli","codex-cli"]}`, `{"sources":["codex"]}`,
-		`{"sources":["claude-desktop"]}`, `{"sources":[1]}`,
-		`{"sources":["codex-desktop","codex-cli","claude-code","other"]}`,
+		`{"sources":["claude-desktop","claude-desktop"]}`, `{"sources":[1]}`,
+		`{"sources":["codex-desktop","codex-cli","claude-code","claude-desktop","other"]}`,
 	} {
 		if _, err := configuredSources(sourceConfigFixture(t, text)); err == nil {
 			t.Fatalf("admitted %s", text)

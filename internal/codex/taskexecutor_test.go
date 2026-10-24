@@ -605,6 +605,7 @@ func TestTaskExecutorKeepsScopedStateAcrossClientReplacement(t *testing.T) {
 		t.Fatalf("the retained state: %v", err)
 	}
 	want := map[string]any{
+		"thread":       map[string]any{"id": executorTaskID, "status": map[string]any{"type": "active"}},
 		"turn":         map[string]any{"id": "turn", "status": "inProgress"},
 		"hasUser":      true,
 		"materialized": true,

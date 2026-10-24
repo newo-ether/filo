@@ -12,8 +12,8 @@ import (
 )
 
 // userSource keeps CLI and Mod access in the selected ordinary user's helper.
-// It forwards one explicit source path and never falls back to Desktop or an
-// auxiliary executor. First-stage sources expose observation, not mutations.
+// It forwards one explicit source path and never falls back to Desktop or another
+// executor. Control requires fresh private scope and exact session binding.
 type userSource struct {
 	worker       *UserWorker
 	id           string
@@ -23,6 +23,10 @@ type userSource struct {
 	streaming    map[uint64]func()
 	nextStream   uint64
 	changed      func(string)
+	// attachments is set when the gateway owns an upload store for this source.
+	// Uploads resolve to path references at the gateway. Claude must also prove
+	// its native executor was started with access to the upload directory.
+	attachments bool
 }
 
 func newUserSource(worker *UserWorker, id string, changed func(string)) *userSource {
@@ -30,7 +34,7 @@ func newUserSource(worker *UserWorker, id string, changed func(string)) *userSou
 }
 
 func (source *userSource) descriptor(ctx context.Context) (protocol.AdapterDescriptor, error) {
-	body, err := source.worker.call(ctx, "/v1/info", nil)
+	body, err := sourceInfoBody(ctx, source.worker)
 	if err != nil {
 		return protocol.AdapterDescriptor{}, err
 	}
@@ -80,8 +84,8 @@ func (source *userSource) scope(ctx context.Context) (string, error) {
 	return descriptor.NativeScopeID, nil
 }
 
-func (source *userSource) status() AdapterStatus {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (source *userSource) status(ctx context.Context) AdapterStatus {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	descriptor, err := source.descriptor(ctx)
 	if err != nil {
@@ -156,7 +160,7 @@ func (source *userSource) Read(ctx context.Context, id, cursor string, activity 
 	return page, nil
 }
 
-func (source *userSource) Access(ctx context.Context, id string) (protocol.SessionAccess, error) {
+func (source *userSource) CatalogAccess(ctx context.Context, id string) (protocol.SessionAccess, error) {
 	source.mu.Lock()
 	access, ok := source.access[id]
 	currentScope := source.currentScope
@@ -182,14 +186,6 @@ func (source *userSource) Access(ctx context.Context, id string) (protocol.Sessi
 	}
 	access.Capabilities = readOnlyCaps(access.Capabilities)
 	return access, nil
-}
-
-func (source *userSource) CatalogAccess(ctx context.Context, id string) (protocol.SessionAccess, error) {
-	return source.Access(ctx, id)
-}
-
-func (source *userSource) ValidateAccess(context.Context, string, string) error {
-	return sourceUnsupported()
 }
 
 func (source *userSource) Attach(ctx context.Context, id string) (func(), error) {
@@ -287,34 +283,6 @@ func (source *userSource) Usage(ctx context.Context) (protocol.AccountUsage, err
 
 func sourceUnsupported() error {
 	return errors.New("Operation is unsupported by this source/session")
-}
-
-func (source *userSource) Create(context.Context, string, string, protocol.SessionSettings) (protocol.Session, protocol.SendReceipt, error) {
-	return protocol.Session{}, protocol.SendReceipt{}, sourceUnsupported()
-}
-
-func (source *userSource) Send(context.Context, string, string, string) (protocol.SendReceipt, error) {
-	return protocol.SendReceipt{}, sourceUnsupported()
-}
-
-func (source *userSource) SetModel(context.Context, string, string) error {
-	return sourceUnsupported()
-}
-
-func (source *userSource) Stop(context.Context, string, string) error {
-	return sourceUnsupported()
-}
-
-func (source *userSource) UpdateSettings(context.Context, string, protocol.SessionSettings) error {
-	return sourceUnsupported()
-}
-
-func (source *userSource) Rename(context.Context, string, string) (protocol.Session, error) {
-	return protocol.Session{}, sourceUnsupported()
-}
-
-func (source *userSource) Archive(context.Context, string) (string, error) {
-	return "", sourceUnsupported()
 }
 
 var _ SessionAPI = (*userSource)(nil)

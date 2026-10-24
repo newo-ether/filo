@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/newo-ether/filo/internal/codex"
@@ -614,6 +615,9 @@ func (s *TaskSessions) register(id string, connection TaskSessionsConnection,
 	// Dispatch the single notification slot to sessions, then activity.
 	connection.Transport().SetHandlers(nil, func(packet map[string]any) {
 		method, _ := packet["method"].(string)
+		if observer, ok := connection.(interface{ Observe(string, any) }); ok {
+			observer.Observe(method, packet["params"])
+		}
 		s.observeTaskAccess(id, entry, method, packet["params"])
 		sessions.Receive(method, packet["params"])
 		activity.Receive(method, packet["params"])
@@ -729,7 +733,7 @@ func (s *TaskSessions) open(ctx context.Context, id string, write bool) (*taskSe
 	// never a browsing-time writer.
 	if err := sessions.Attach(id); err != nil {
 		connection.Close()
-		return nil, err
+		return nil, fmt.Errorf("Cannot attach native task %s; it may have unloaded: %w", id, err)
 	}
 	s.mu.Lock()
 	if s.draining {

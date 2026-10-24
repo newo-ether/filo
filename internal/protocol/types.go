@@ -99,6 +99,8 @@ type QueuedInput struct {
 }
 
 type Runtime struct {
+	Title                    *Text             `json:"title,omitempty"`
+	SettingsChange           *SettingsChange   `json:"settingsChange,omitempty"`
 	Status                   string            `json:"status"`
 	ActiveTurnID             *string           `json:"activeTurnId"`
 	Model                    *string           `json:"model"`
@@ -114,6 +116,8 @@ type Runtime struct {
 // InputReceipt proves a native user item independently of the visible page.
 // Producers retain at most 128 receipts, unique by nonblank client identity.
 type InputReceipt struct {
+	Kind      string `json:"kind,omitempty"`
+	State     string `json:"state,omitempty"`
 	ClientID  string `json:"clientId"`
 	TurnID    string `json:"turnId"`
 	MessageID string `json:"messageId"`
@@ -163,9 +167,21 @@ type SessionSettings struct {
 	ServiceTier Optional[*string] `json:"serviceTier,omitzero"`
 }
 
+type SettingsChange struct {
+	ID           string          `json:"id"`
+	State        string          `json:"state"`
+	Requested    SessionSettings `json:"requested"`
+	ActualModel  string          `json:"actualModel,omitempty"`
+	ActualEffort string          `json:"actualEffort,omitempty"`
+	TurnID       string          `json:"turnId,omitempty"`
+}
+
 type SendReceipt struct {
-	TurnID   string `json:"turnId"`
-	ClientID string `json:"clientId"`
+	Kind      string `json:"kind,omitempty"`
+	State     string `json:"state,omitempty"`
+	MessageID string `json:"messageId,omitempty"`
+	TurnID    string `json:"turnId"`
+	ClientID  string `json:"clientId"`
 }
 
 // ServiceInfo is the immutable capability advertisement included in /v1/info.

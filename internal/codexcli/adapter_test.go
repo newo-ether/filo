@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/newo-ether/filo/internal/codex"
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
@@ -61,7 +63,7 @@ func TestHistoryWorksWithoutDaemonAndNeverAdvertisesExecution(t *testing.T) {
 		t.Fatal("construction read native history")
 	}
 	status := a.Status(context.Background())
-	if status.State != "connected" || status.DaemonState != "disconnected" || !status.Capabilities.History ||
+	if status.State != "disconnected" || status.Reason != "native_connection_unavailable" || status.DaemonState != "disconnected" || !status.Capabilities.History ||
 		status.Capabilities.Live || status.Capabilities.IdleSend || status.Capabilities.Create || status.Capabilities.Stop ||
 		status.Capabilities.Models || status.Capabilities.Usage || status.Capabilities.ActiveSend != "unsupported" {
 		t.Fatalf("unproven capabilities: %+v", status)
@@ -92,6 +94,23 @@ func TestHistoryWorksWithoutDaemonAndNeverAdvertisesExecution(t *testing.T) {
 	}
 	if f.calls.Load() != before {
 		t.Fatal("metadata failure fell back to history")
+	}
+}
+
+func TestStatusRefusesStaleDaemonStateWhenCurrentConnectionIsUnavailable(t *testing.T) {
+	a, err := New(Options{History: &historyFixture{},
+		Scope:      func(context.Context) (string, error) { return "verified-scope", nil },
+		SocketPath: filepath.Join(t.TempDir(), "missing.sock"), UserID: "fixture-user",
+		VerifyDaemon: func(context.Context, codex.LocalDaemonIdentity) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	a.daemonState = "connected"
+	status := a.Status(context.Background())
+	if status.State != "disconnected" || status.Reason != "native_connection_unavailable" || status.DaemonState != "unavailable" || !status.Capabilities.History {
+		t.Fatalf("stale native connection became online: %+v", status)
 	}
 }
 

@@ -40,7 +40,7 @@ type Options struct {
 }
 
 // Status separates readable verified history from the optional daemon metadata
-// connection. State is connected only when the history scope is verified.
+// connection. Readable history alone never establishes a live native connection.
 type Status struct {
 	State        string
 	Reason       string
@@ -72,8 +72,19 @@ func New(options Options) (*Adapter, error) {
 	return &Adapter{options: options, daemonState: "disconnected", connections: make(map[*codex.CodexHost]struct{})}, nil
 }
 
-func historyCapabilities() protocol.AdapterCapabilities {
-	return protocol.AdapterCapabilities{History: true, LazyMessages: true, ActiveSend: "unsupported", HistoryMode: "bounded", Settings: []string{}}
+// MetadataCapabilities describes implemented read operations for a configured
+// daemon endpoint. It does not prove reachability or grant native execution.
+func MetadataCapabilities(configuredEndpoint bool) protocol.AdapterCapabilities {
+	return protocol.AdapterCapabilities{
+		History: true, LazyMessages: true, ActiveSend: "unsupported", HistoryMode: "bounded", Settings: []string{},
+		Models: configuredEndpoint, Usage: configuredEndpoint,
+	}
+}
+
+// Capabilities reads only configuration. Status and every metadata request verify
+// the actual peer and native store independently before reporting native results.
+func (a *Adapter) Capabilities() protocol.AdapterCapabilities {
+	return MetadataCapabilities(a.options.SocketPath != "")
 }
 
 func scopeFailure(ctx context.Context, err error) error {
@@ -123,10 +134,17 @@ func (a *Adapter) Status(ctx context.Context) Status {
 		return Status{State: "unavailable", Reason: "native_scope_unavailable", DaemonState: "disconnected",
 			Capabilities: protocol.AdapterCapabilities{ActiveSend: "unsupported", HistoryMode: "bounded", Settings: []string{}}}
 	}
-	a.mu.Lock()
-	daemon := a.daemonState
-	a.mu.Unlock()
-	return Status{State: "connected", DaemonState: daemon, Capabilities: historyCapabilities()}
+	if a.options.SocketPath == "" {
+		return Status{State: "disconnected", Reason: "native_connection_unavailable", DaemonState: "disconnected", Capabilities: a.Capabilities()}
+	}
+	ctx, cancel := context.WithTimeout(ctx, a.readTimeout())
+	defer cancel()
+	_, release, err := a.metadata(ctx)
+	if err != nil {
+		return Status{State: "disconnected", Reason: "native_connection_unavailable", DaemonState: "unavailable", Capabilities: a.Capabilities()}
+	}
+	release()
+	return Status{State: "connected", DaemonState: "connected", Capabilities: a.Capabilities()}
 }
 
 // Access uses a verified stable native scope, never a socket path or process ID.
@@ -168,7 +186,7 @@ func (a *Adapter) identity(ctx context.Context, scope, id string) (protocol.Sess
 		access = protocol.SessionAccess{NativeScopeID: scope, CanonicalSessionRef: base64.RawURLEncoding.EncodeToString(canonical[:]),
 			Binding: base64.RawURLEncoding.EncodeToString(binding[:])}
 	}
-	access.Capabilities = historyCapabilities()
+	access.Capabilities = a.Capabilities()
 	return access, ctx.Err()
 }
 

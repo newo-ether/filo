@@ -41,6 +41,8 @@ type ExecutorConfig struct {
 	Workspace   string  `json:"workspace"`
 	TaskID      *string `json:"taskId,omitempty"`
 	CreateTrace string  `json:"createTrace,omitempty"`
+	// Source is absent only in legacy Desktop executor records.
+	Source string `json:"source,omitempty"`
 }
 
 // ExecutorState is the durable lifecycle record a follower reads to find a
@@ -92,6 +94,13 @@ func ParseExecutorConfig(value any) (ExecutorConfig, error) {
 	config.Token = token
 	config.NativeToken = nativeToken
 	config.Workspace = workspace
+	if source, present := object["source"]; present {
+		text, ok := source.(string)
+		if !ok || (text != codexDesktopSource && text != codexCLISource) {
+			return config, errors.New("Invalid executor source")
+		}
+		config.Source = text
+	}
 	return config, nil
 }
 

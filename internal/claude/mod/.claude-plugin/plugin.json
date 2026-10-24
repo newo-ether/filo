@@ -1,5 +1,5 @@
 {
   "name": "filo-observer",
   "version": "0.1.0",
-  "description": "Opt-in read-only Filo bridge for native Claude Code session events"
+  "description": "Filo native session observation, model catalog, request effort and exact-turn Stop"
 }

@@ -44,7 +44,7 @@ func NativeScopeID(ctx context.Context) string {
 
 // MultiAdapterVersion is an optional extension to application protocol 2.
 const MultiAdapterVersion = 1
-const MaxAdapters = 3
+const MaxAdapters = 4
 
 // AdapterCapabilities describes only operations proven by a native adapter.
 // An absent boolean is false; activeSend and historyMode have explicit values.

@@ -405,6 +405,7 @@ func (s *Server) route(w *tracking, request *http.Request) error {
 }
 
 func (s *Server) info(w *tracking, ctx context.Context) error {
+	ctx = withSourceInfoSnapshot(ctx)
 	info := infoResponse{
 		SupportsRawUploads:   s.uploads != nil,
 		ServiceInfo:          protocol.CodexServiceInfo,

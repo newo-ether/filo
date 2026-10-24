@@ -38,6 +38,7 @@ type desktopAccess struct {
 	entry                         *followed
 	connection                    uint64
 	capabilities                  protocol.AdapterCapabilities
+	recovery                      bool
 }
 
 type accessAdmissionKey struct{}
@@ -213,8 +214,11 @@ func (sessions *DesktopSessions) resolveAccess(ctx context.Context, id string) (
 func (sessions *DesktopSessions) scopeAccess(ctx context.Context, id string, access desktopAccess) (desktopAccess, error) {
 	access.binding = sessions.sealAccess("history", id)
 	owned, err := sessions.created(ctx, id)
-	if err != nil || !owned {
+	if err != nil {
 		return access, err
+	}
+	if !owned {
+		return sessions.idleRecoveryAccess(ctx, id, access)
 	}
 	provider, ok := sessions.options.Created.(NativeAccess)
 	if !ok || sessions.options.WithAccessBinding == nil {
@@ -254,7 +258,44 @@ func (sessions *DesktopSessions) scopeAccess(ctx context.Context, id string, acc
 	access.capabilities.Stop = native.Capabilities.Stop
 	access.capabilities.Settings = append([]string{}, native.Capabilities.Settings...)
 	access.capabilities.Uploads = native.Capabilities.Uploads
+	if !native.Capabilities.Live && !native.Capabilities.IdleSend {
+		return sessions.idleRecoveryAccess(ctx, id, access)
+	}
 	return access, nil
+}
+
+// This is a read-only offer for an explicit mutation, never writer allocation.
+// Dispatch revalidates this proof and the helper checks idleness and native locks.
+func (sessions *DesktopSessions) idleRecoveryAccess(ctx context.Context, id string, access desktopAccess) (desktopAccess, error) {
+	_, supportsRecovery := sessions.options.Created.(interface {
+		Created(context.Context, string) (bool, error)
+	})
+	if !supportsRecovery || sessions.options.WithAccessBinding == nil || sessions.options.History == nil {
+		return access, nil
+	}
+	page, err := sessions.options.History.Read(ctx, id, "", false, nil)
+	if err != nil {
+		return access, err
+	}
+	if !RecoverableRuntime(page.Runtime) {
+		return access, nil
+	}
+	owner, err := sessions.f.owner(ctx, id)
+	if err != nil || owner != "" {
+		if err == nil {
+			err = unavailable()
+		}
+		return access, err
+	}
+	identity, _ := json.Marshal(page.Runtime)
+	access.binding = sessions.sealAccess("idle-recovery", id, access.binding, string(identity))
+	access.recovery = true
+	access.capabilities.IdleSend = true
+	access.capabilities.Uploads = true
+	if sessions.options.Base != nil {
+		access.capabilities.Settings = []string{"model", "effort", "serviceTier"}
+	}
+	return access, ctx.Err()
 }
 
 func (sessions *DesktopSessions) admitAccess(ctx context.Context, id string) (context.Context, error) {
@@ -301,7 +342,7 @@ func (sessions *DesktopSessions) scopedDestination(ctx context.Context, id strin
 	if err := sessions.ValidateAccess(ctx, id, access.binding); err != nil {
 		return "", true, err
 	}
-	if access.owner == "" && access.nativeBinding == "" {
+	if access.owner == "" && access.nativeBinding == "" && !access.recovery {
 		return "", true, unavailable()
 	}
 	return access.owner, true, nil
@@ -323,7 +364,11 @@ func (sessions *DesktopSessions) scopedMutationContext(ctx context.Context, id, 
 		if err := sessions.ValidateAccess(ctx, id, access.binding); err != nil {
 			return ctx, err
 		}
-		ctx = sessions.options.WithAccessBinding(ctx, access.nativeBinding)
+		if access.recovery {
+			ctx = WithIdleRecovery(sessions.options.WithAccessBinding(ctx, ""), id)
+		} else {
+			ctx = sessions.options.WithAccessBinding(ctx, access.nativeBinding)
+		}
 	}
 	return ctx, ctx.Err()
 }

@@ -24,7 +24,7 @@ func (history *NativeHistory) List(ctx context.Context, cursor string) (protocol
 	if err != nil {
 		return page, err
 	}
-	query := "SELECT id,COALESCE(name,title),cwd,updated_at FROM threads WHERE archived=0 "
+	query := "SELECT id,COALESCE(NULLIF(name,''),title,''),cwd,updated_at FROM threads WHERE archived=0 "
 	var args []any
 	if fields != nil {
 		at, atOK := safeInteger(fields["at"])

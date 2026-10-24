@@ -16,7 +16,7 @@ const (
 	// active task before the installer changes its Filo registration.
 	probeHostIdleArgument = "probe-host-idle"
 	// commandUsage is the one line printed for a call that names no entry point.
-	commandUsage = "Usage: filo <executor-runner|system-service|standalone|probe-host-idle|request> [arguments]"
+	commandUsage = "Usage: filo <executor-runner|claude-executor-runner|system-service|standalone|probe-host-idle|request> [arguments]"
 )
 
 // Main dispatches one Filo entry point and returns its process exit code. An
@@ -30,8 +30,22 @@ func Main(arguments []string, stderr io.Writer) int {
 		return 2
 	}
 	switch arguments[0] {
+	case "codex-shared-owner":
+		if len(arguments) != 2 {
+			return 2
+		}
+		if err := RunCLISharedOwner(arguments[1]); err != nil {
+			return 1
+		}
+		return 0
 	case "request":
 		return RunRequest(arguments[1:], nil, stderr)
+	case ClaudeExecutorRunnerArgument:
+		if err := RunClaudeExecutorRunner(arguments[1:]); err != nil {
+			_, _ = io.WriteString(stderr, err.Error()+"\n")
+			return 1
+		}
+		return 0
 	case executorRunnerArgument:
 		return RunTaskExecutorRunner(arguments[1:])
 	case systemServiceArgument:

@@ -46,6 +46,8 @@ type ExecutorLauncher func(directory string) error
 type TaskExecutorFactoryOptions struct {
 	// Directory is the absolute private executor root.
 	Directory string
+	// Source selects the native runtime. Empty preserves legacy Desktop records.
+	Source string
 	// Workspace is the absolute native workspace recorded in every configuration.
 	Workspace string
 	// Launch starts one executor. Nil selects a detached copy of this binary
@@ -70,6 +72,7 @@ type executorOpening struct {
 // native process when a connection closes.
 type TaskExecutorFactory struct {
 	directory string
+	source    string
 	workspace string
 	launch    ExecutorLauncher
 	capacity  int
@@ -89,8 +92,12 @@ func NewTaskExecutorFactory(options TaskExecutorFactoryOptions) (*TaskExecutorFa
 	if !absoluteWorkspace(options.Directory) || !absoluteWorkspace(options.Workspace) {
 		return nil, errors.New("Executor paths must be absolute")
 	}
+	if options.Source != "" && options.Source != codexDesktopSource && options.Source != codexCLISource {
+		return nil, errors.New("Invalid executor source")
+	}
 	factory := &TaskExecutorFactory{
 		directory: options.Directory,
+		source:    options.Source,
 		workspace: options.Workspace,
 		launch:    options.Launch,
 		capacity:  options.Capacity,
@@ -112,7 +119,11 @@ func NewTaskExecutorFactory(options TaskExecutorFactoryOptions) (*TaskExecutorFa
 // Owns reports creation or recovery provenance. Recovery permits reconnecting
 // the recorded executor; replacement writers still require idle admission.
 func (f *TaskExecutorFactory) Owns(taskID string) (bool, error) {
-	return taskScope(f.directory, taskID, true)
+	owned, err := taskScope(f.directory, taskID, true)
+	if err != nil || !owned {
+		return owned, err
+	}
+	return f.ownsSource(taskID)
 }
 
 // Open returns a connection to the private executor of one task, allocating a
@@ -295,6 +306,7 @@ func (f *TaskExecutorFactory) allocate(taskID *string, createTrace string) (stri
 		return "", err
 	}
 	config := ExecutorConfig{
+		Source:      f.source,
 		Token:       token,
 		NativeToken: nativeToken,
 		Workspace:   f.workspace,
@@ -347,9 +359,15 @@ func (f *TaskExecutorFactory) existingFor(ctx context.Context, taskID string, ma
 		return "", false, err
 	}
 	mayAllocate := mayLaunch && (created || sessions.IdleRecoveryAllowed(ctx, taskID))
+	if executorSource(f.source) == codexCLISource && !created {
+		return "", false, nil
+	}
 	owned, err := f.Owns(taskID)
 	if err != nil {
 		return "", false, err
+	}
+	if !owned && created {
+		return "", false, errors.New("Executor source does not match creation provenance")
 	}
 	if !owned {
 		if !mayAllocate {
@@ -413,6 +431,9 @@ func (f *TaskExecutorFactory) connect(ctx context.Context, directory string, tas
 	config, err := ParseExecutorConfig(value)
 	if err != nil {
 		return nil, err
+	}
+	if executorSource(config.Source) != executorSource(f.source) {
+		return nil, errors.New("Executor source does not match")
 	}
 	deadline := time.Now().Add(readiness)
 	for !f.isStopped() && time.Now().Before(deadline) {

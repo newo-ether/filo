@@ -105,6 +105,7 @@ type TaskExecutor struct {
 	pending      int
 	active       bool
 	settled      bool
+	nativeClosed bool
 	retiring     bool
 	opening      bool
 
@@ -336,6 +337,7 @@ func (e *TaskExecutor) request(method string, params any) (any, error) {
 		e.mu.Lock()
 		owned := e.id
 		turn := e.turn
+		nativeClosed := e.nativeClosed
 		state := map[string]any{"hasUser": e.hasUser, "materialized": e.materialized}
 		e.mu.Unlock()
 		if owned == "" || threadID != owned {
@@ -343,6 +345,20 @@ func (e *TaskExecutor) request(method string, params any) (any, error) {
 		}
 		if turn != nil {
 			state["turn"] = map[string]any{"id": turn.id, "status": turn.status}
+			// The same native owner has already confirmed this turn. Its live
+			// identity does not depend on asynchronous rollout publication.
+			status := ""
+			if turn.status == "inProgress" {
+				status = "active"
+			} else if executorTerminalTurnStatuses[turn.status] {
+				status = "idle"
+				if turn.status == "failed" {
+					status = "systemError"
+				}
+			}
+			if status != "" && !nativeClosed {
+				state["thread"] = map[string]any{"id": owned, "status": map[string]any{"type": status}}
+			}
 		}
 		return state, nil
 	}
@@ -473,6 +489,9 @@ func (e *TaskExecutor) handleNotification(packet map[string]any) {
 			e.hasUser = true
 			e.materialized = true
 		}
+	}
+	if method == "thread/closed" || method == "thread/archived" {
+		e.nativeClosed = true
 	}
 	if executorTerminalMethods[method] {
 		e.active = false

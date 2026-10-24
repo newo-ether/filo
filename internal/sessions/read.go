@@ -84,6 +84,20 @@ func (sessions *DesktopSessions) Read(ctx context.Context, id, cursor string, ac
 		return empty, err
 	}
 	live.Messages = mergeTurns(persisted.Messages, live.Messages)
+	if live.Runtime != nil {
+		runtime := *live.Runtime
+		if persisted.Runtime != nil {
+			runtime.Title = persisted.Runtime.Title
+		}
+		if metadata, ok := sessions.options.History.(interface {
+			Title(context.Context, string) (*protocol.Text, error)
+		}); ok {
+			if title, titleErr := metadata.Title(ctx, id); titleErr == nil {
+				runtime.Title = title
+			}
+		}
+		live.Runtime = &runtime
+	}
 	live.NextCursor = persisted.NextCursor
 	live.InputReceipts = protocol.MergeInputReceipts(persisted.InputReceipts, live.InputReceipts)
 	return live, nil

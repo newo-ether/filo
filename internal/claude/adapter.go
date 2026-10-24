@@ -31,10 +31,11 @@ var nativeUUID = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 var tokenPattern = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
 
 // Config belongs to the existing selected-user helper. Token is a distinct
-// private Mod secret, never the public service bearer. No native install is needed.
+// private Mod secret, never the public service bearer. Origin selects one native surface.
 type Config struct {
 	Token         string
 	NativeScopeID string
+	Origin        string
 	TTL           time.Duration
 	OnChange      func(nativeSessionID string)
 }
@@ -46,11 +47,13 @@ type BridgeStatus struct {
 
 // Adapter is both the native SessionAPI and the authenticated loopback handler.
 // State is bounded in memory and discarded on helper restart. No transcript files
-// are read or written. Separate registrations cannot assert account continuity.
+// are read for conversation recovery or written. Bounded native metadata title
+// reads are separate from conversation projection. Separate registrations cannot assert account continuity.
 type Adapter struct {
 	mu            sync.Mutex
 	token         string
 	scope         string
+	origin        string
 	ttl           time.Duration
 	onChange      func(string)
 	now           func() time.Time
@@ -58,32 +61,58 @@ type Adapter struct {
 }
 
 type registration struct {
-	nativeID      string
-	nonce         string
-	instance      string
-	canonical     string
-	cwd           string
-	origin        string
-	version       string
-	expires       time.Time
-	updated       time.Time
-	sequence      uint64
-	lastDigest    [32]byte
-	rows          []observedRow
-	rowBytes      int
-	dropped       bool
-	status        string
-	activeTurn    string
-	completedTurn string
+	nativeID          string
+	nonce             string
+	instance          string
+	canonical         string
+	cwd               string
+	origin            string
+	version           string
+	expires           time.Time
+	updated           time.Time
+	sequence          uint64
+	lastDigest        [32]byte
+	rows              []observedRow
+	rowBytes          int
+	dropped           bool
+	status            string
+	activeTurn        string
+	activeHasUser     bool
+	title             *protocol.Text
+	transcript        string
+	metadata          string
+	completedTurn     string
+	modelOptions      []string
+	model             *string
+	effort            *string
+	contextTokens     *float64
+	contextWindow     *float64
+	canStop           bool
+	canInput          bool
+	canSettings       bool
+	inputs            []modInput
+	settingsAfterTurn string
+	settingsChange    *protocol.SettingsChange
+	requestRevision   uint64
+	pending           *pendingModCommand
 }
 
 type observedRow struct {
-	UUID string        `json:"uuid"`
-	Role string        `json:"role"`
-	Text protocol.Text `json:"text"`
+	UUID     string        `json:"uuid"`
+	Role     string        `json:"role"`
+	Text     protocol.Text `json:"text"`
+	TurnID   string
+	NativeID string
+	Activity *protocol.Activity
 }
 
 func New(config Config) (*Adapter, error) {
+	if config.Origin == "" {
+		config.Origin = "terminal"
+	}
+	if config.Origin != "terminal" && config.Origin != "desktop" {
+		return nil, errors.New("Claude Mod bridge requires a terminal or desktop origin")
+	}
 	if !tokenPattern.MatchString(config.Token) || !opaque.MatchString(config.NativeScopeID) {
 		return nil, errors.New("Claude Mod bridge requires a private 256-bit token and opaque native scope")
 	}
@@ -93,20 +122,24 @@ func New(config Config) (*Adapter, error) {
 	if config.TTL < 3*time.Second || config.TTL > time.Minute {
 		return nil, errors.New("Claude Mod bridge TTL must be between 3 and 60 seconds")
 	}
-	return &Adapter{token: config.Token, scope: config.NativeScopeID, ttl: config.TTL,
+	return &Adapter{token: config.Token, scope: config.NativeScopeID, origin: config.Origin, ttl: config.TTL,
 		onChange: config.OnChange, now: time.Now, registrations: make(map[string]*registration)}, nil
 }
 
-// Capabilities is deliberately read-only. Observed history begins at registration
-// and is bounded; neither complete history nor exact input acceptance is available.
+// Capabilities is the source ceiling. Native Stop still requires a live Mod
+// registration, its abort API, an exact active turn and terminal confirmation.
 func Capabilities() protocol.AdapterCapabilities {
-	return protocol.AdapterCapabilities{History: true, Live: true, ActiveSend: "unsupported",
-		Settings: []string{}, HistoryMode: "bounded", LazyMessages: true}
+	return protocol.AdapterCapabilities{History: true, Live: true, Stop: true, Models: true, IdleSend: true, ActiveSend: "native-steer",
+		Settings: []string{"model", "effort"}, HistoryMode: "bounded", LazyMessages: true}
 }
 
 func (a *Adapter) Descriptor() protocol.AdapterDescriptor {
 	status := a.Status()
-	return protocol.AdapterDescriptor{ID: "claude-code", Family: "claude", Origin: "cli",
+	id, origin := "claude-code", "cli"
+	if a.origin == "desktop" {
+		id, origin = "claude-desktop", "desktop"
+	}
+	return protocol.AdapterDescriptor{ID: id, Family: "claude", Origin: origin,
 		State: status.State, Error: status.Error, NativeScopeID: a.scope, Capabilities: Capabilities()}
 }
 
@@ -124,6 +157,7 @@ func (a *Adapter) Status() BridgeStatus {
 func (a *Adapter) pruneLocked() {
 	for id, r := range a.registrations {
 		if !a.now().Before(r.expires) {
+			notifyModCommand(r)
 			delete(a.registrations, id)
 		}
 	}
@@ -160,5 +194,5 @@ func (a *Adapter) canonical(id, nonce string) string {
 
 func (a *Adapter) accessLocked(r *registration) protocol.SessionAccess {
 	return protocol.SessionAccess{NativeScopeID: a.scope, CanonicalSessionRef: r.canonical,
-		Binding: r.nonce, Capabilities: Capabilities()}
+		Binding: r.nonce, Capabilities: a.registrationCapabilities(r)}
 }

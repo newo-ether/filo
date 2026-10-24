@@ -52,8 +52,14 @@ func ConnectLocalDaemon(ctx context.Context, options LocalDaemonOptions) (_ *Cod
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	defer func() {
-		if resultErr != nil && ctx.Err() != nil {
-			resultErr = ctx.Err()
+		if resultErr == nil {
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			resultErr = err
+		} else if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			// The RPC timer can fire before the context's cancellation callback.
+			resultErr = context.DeadlineExceeded
 		}
 	}()
 	path, release, err := validateDaemonSocket(options.SocketPath, options.UserID)
@@ -111,6 +117,7 @@ func ConnectLocalDaemon(ctx context.Context, options LocalDaemonOptions) (_ *Cod
 	if !ok || !filepath.IsAbs(identity.CodexHome) {
 		return nil, errors.New("Local Codex daemon did not report its native store")
 	}
+	host.CodexHome = identity.CodexHome
 	if err := options.VerifyIdentity(ctx, identity); err != nil {
 		return nil, err
 	}

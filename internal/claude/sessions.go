@@ -3,7 +3,6 @@ package claude
 import (
 	"context"
 	"errors"
-	"math"
 	"sort"
 
 	"github.com/newo-ether/filo/internal/protocol"
@@ -21,6 +20,16 @@ func (a *Adapter) List(ctx context.Context, cursor string) (protocol.SessionPage
 		return protocol.SessionPage{}, errors.New("Claude Mod catalog has no older page")
 	}
 	a.mu.Lock()
+	a.pruneLocked()
+	titles := make([]string, 0, len(a.registrations))
+	for id := range a.registrations {
+		titles = append(titles, id)
+	}
+	a.mu.Unlock()
+	for _, id := range titles {
+		a.refreshTitle(ctx, id)
+	}
+	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.pruneLocked()
 	page := protocol.SessionPage{Sessions: []protocol.Session{}}
@@ -34,8 +43,8 @@ func (a *Adapter) List(ctx context.Context, cursor string) (protocol.SessionPage
 		access := a.accessLocked(r)
 		status := r.status
 		page.Sessions = append(page.Sessions, protocol.Session{ID: id,
-			Title: protocol.Text("Claude Code (" + r.origin + ")"), Cwd: r.cwd,
-			UpdatedAt: float64(r.updated.UnixMilli()) / 1000, Status: protocol.Known(&status), Access: &access})
+			Title: observedTitle(r), Cwd: r.cwd,
+			UpdatedAt: float64(r.updated.Unix()), Status: protocol.Known(&status), Access: &access})
 	}
 	return page, nil
 }
@@ -79,6 +88,7 @@ func (a *Adapter) Read(ctx context.Context, id, cursor string, activity bool, ex
 	if len(excludedTurns) != 0 {
 		return protocol.ConversationPage{}, errors.New("Claude observed rows have no proven native turn association")
 	}
+	a.refreshTitle(ctx, id)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	r, err := a.findLocked(id)
@@ -88,14 +98,29 @@ func (a *Adapter) Read(ctx context.Context, id, cursor string, activity bool, ex
 	access := a.accessLocked(r)
 	page := protocol.ConversationPage{Messages: []protocol.Message{}, Queued: []protocol.QueuedInput{},
 		Access: &access, Runtime: runtimeView(r)}
+	for i := range r.inputs {
+		input := &r.inputs[i]
+		if input.Receipt.State == "submitted" && a.now().After(input.Deadline) {
+			input.Receipt.State = "unconfirmed"
+		}
+		page.InputReceipts = append(page.InputReceipts, input.Receipt)
+	}
 	for _, row := range r.rows {
-		// uuid is a native transcript row ID, not its array position or text hash.
-		// session.append does not prove a turn link or native timestamp.
-		page.Messages = append(page.Messages, protocol.Message{MessageIdentity: protocol.MessageIdentity{
-			ID: row.UUID, NativeID: row.UUID, GroupID: row.UUID, Role: row.Role, Timestamp: protocol.Number(math.NaN())},
-			Text: row.Text})
+		if row.Activity != nil && !activity {
+			continue
+		}
+		// Append rows retain native UUIDs without inferred turns. Stream blocks
+		// carry their own explicit turn/step/block or tool-use identity.
+		page.Messages = append(page.Messages, observedMessage(row))
 	}
 	return page, nil
+}
+
+func observedTitle(r *registration) protocol.Text {
+	if r.title != nil {
+		return *r.title
+	}
+	return protocol.Text("")
 }
 
 func runtimeView(r *registration) *protocol.Runtime {
@@ -108,7 +133,28 @@ func runtimeView(r *registration) *protocol.Runtime {
 		value := r.completedTurn
 		completed = &value
 	}
-	result := &protocol.Runtime{Status: r.status, ActiveTurnID: active}
+	result := &protocol.Runtime{Status: r.status, ActiveTurnID: active,
+		ActiveTurnHasUserMessage: protocol.Known(active != nil && r.activeHasUser), Title: r.title}
+	if r.settingsChange != nil {
+		value := *r.settingsChange
+		result.SettingsChange = &value
+	}
+	if r.model != nil {
+		value := *r.model
+		result.Model = &value
+	}
+	if r.effort != nil {
+		value := *r.effort
+		result.Effort = protocol.Known(&value)
+	}
+	if r.contextTokens != nil {
+		value := *r.contextTokens
+		result.ContextTokens = &value
+	}
+	if r.contextWindow != nil {
+		value := *r.contextWindow
+		result.ContextWindow = &value
+	}
 	if completed != nil {
 		result.CompletedTurnID = protocol.Known(completed)
 	}
@@ -147,54 +193,25 @@ func (a *Adapter) Attach(ctx context.Context, id string) (func(), error) {
 	return func() {}, nil
 }
 
-// Send always refuses before dispatch. Checking busy is intentional, but no
-// idle path calls prompt.submit until a documented native receipt is available.
+// Send uses the native Mod with submitted/observed, explicitly non-exact receipts.
 func (a *Adapter) Send(ctx context.Context, id, text, clientID string) (protocol.SendReceipt, error) {
-	if err := ctx.Err(); err != nil {
-		return protocol.SendReceipt{}, err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	r, err := a.findLocked(id)
-	if err != nil {
-		return protocol.SendReceipt{}, err
-	}
-	if r.status != "idle" {
-		return protocol.SendReceipt{}, errors.New("Claude session is busy or its idle state is unproven; input was not queued")
-	}
-	return protocol.SendReceipt{}, errors.New("Claude send is unsupported: official prompt.submit cannot prove clientId to native user UUID to turnId acceptance")
+	return a.sendObserved(ctx, id, text, clientID)
 }
 
 func (a *Adapter) Stop(ctx context.Context, id, turnID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	r, err := a.findLocked(id)
-	if err != nil {
-		return err
-	}
-	if turnID == "" || turnID != r.activeTurn {
-		return errors.New("Claude native active turn changed")
-	}
-	return errors.New("Claude stop is unsupported: turn.abort may background tools; native terminal semantics are unqualified")
+	return a.stopNative(ctx, id, turnID)
 }
 
 func (a *Adapter) Create(context.Context, string, string, protocol.SessionSettings) (protocol.Session, protocol.SendReceipt, error) {
 	return protocol.Session{}, protocol.SendReceipt{}, errors.New("Claude supports only open opted-in Mod sessions; creation is unsupported")
 }
 
-func (a *Adapter) Models(context.Context) ([]protocol.Model, error) {
-	return nil, errors.New("Claude native model catalog is unsupported")
+func (a *Adapter) SetModel(ctx context.Context, id, model string) error {
+	return a.updateNativeSettings(ctx, id, protocol.SessionSettings{Model: protocol.Known(model)})
 }
 
-func (a *Adapter) SetModel(context.Context, string, string) error {
-	return unsupported("model changes")
-}
-
-func (a *Adapter) UpdateSettings(context.Context, string, protocol.SessionSettings) error {
-	return unsupported("settings")
+func (a *Adapter) UpdateSettings(ctx context.Context, id string, settings protocol.SessionSettings) error {
+	return a.updateNativeSettings(ctx, id, settings)
 }
 
 func (a *Adapter) Rename(context.Context, string, string) (protocol.Session, error) {

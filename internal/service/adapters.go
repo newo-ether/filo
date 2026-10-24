@@ -21,10 +21,14 @@ type Adapter struct {
 	ID, Family, Origin, NativeScopeID string
 	Scope                             func(context.Context) (string, error)
 	Capabilities                      protocol.AdapterCapabilities
-	Sessions                          SessionAPI
-	Status                            func() AdapterStatus
-	Usage                             func(context.Context) (protocol.AccountUsage, error)
-	Uploads                           *uploads.Store
+	// CapabilitySource may narrow the configured maximum using fresh native evidence.
+	CapabilitySource func(context.Context) (protocol.AdapterCapabilities, error)
+	Sessions         SessionAPI
+	Status           func() AdapterStatus
+	// StatusSource receives the discovery request context when status needs I/O.
+	StatusSource func(context.Context) AdapterStatus
+	Usage        func(context.Context) (protocol.AccountUsage, error)
+	Uploads      *uploads.Store
 }
 
 type AdapterStatus struct {
@@ -47,8 +51,9 @@ type adapterSurface struct {
 
 type adapterView struct {
 	*adapterSurface
-	scope  string
-	server *Server
+	scope        string
+	Capabilities protocol.AdapterCapabilities
+	server       *Server
 }
 
 var adapterIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,63}$`)
@@ -90,11 +95,11 @@ func (s *Server) configureAdapters(configured []Adapter) error {
 		return nil
 	}
 	if len(configured) == 0 || len(configured) > protocol.MaxAdapters {
-		return errors.New("Expected one to three configured adapters")
+		return errors.New("Expected one to four configured adapters")
 	}
 	s.adapters = make(map[string]*adapterSurface, len(configured))
 	for _, a := range configured {
-		validID := a.ID == "codex-desktop" || a.ID == "codex-cli" || a.ID == "claude-code"
+		validID := a.ID == codexDesktopSource || a.ID == codexCLISource || a.ID == claudeCodeSource || a.ID == claudeDesktopSource
 		if !validID || s.adapters[a.ID] != nil || a.Family != "codex" && a.Family != "claude" ||
 			a.Origin != "desktop" && a.Origin != "cli" || a.Scope == nil && !opaquePattern.MatchString(a.NativeScopeID) {
 			return errors.New("Invalid configured adapter identity")
@@ -122,7 +127,9 @@ func (s *Server) configureAdapters(configured []Adapter) error {
 		if a.Usage == nil {
 			caps.Usage = false
 		}
-		if a.Uploads == nil {
+		// Workers report native attachment permission; only the public gateway
+		// owns the upload store. Upload routes still require a local store.
+		if a.Uploads == nil && s.layer != "worker" {
 			caps.Uploads = false
 		}
 		a.Capabilities = caps
@@ -152,7 +159,9 @@ func (a *adapterSurface) currentScope(ctx context.Context) (string, error) {
 
 func (a *adapterSurface) descriptor(ctx context.Context) protocol.AdapterDescriptor {
 	status := AdapterStatus{State: "unavailable"}
-	if a.Status != nil {
+	if a.StatusSource != nil {
+		status = a.StatusSource(ctx)
+	} else if a.Status != nil {
 		status = a.Status()
 	}
 	switch status.State {
@@ -173,8 +182,14 @@ func (a *adapterSurface) descriptor(ctx context.Context) protocol.AdapterDescrip
 		digest.Write([]byte("unavailable:" + a.ID))
 		scope = base64.RawURLEncoding.EncodeToString(digest.Sum(nil))
 	}
+	caps, capabilityErr := a.currentCapabilities(ctx)
+	if capabilityErr != nil {
+		status.State = "unavailable"
+		code := "native_capabilities_unavailable"
+		status.Error = &code
+	}
 	return protocol.AdapterDescriptor{ID: a.ID, Family: a.Family, Origin: a.Origin,
-		State: status.State, Error: status.Error, NativeScopeID: scope, Capabilities: a.Capabilities}
+		State: status.State, Error: status.Error, NativeScopeID: scope, Capabilities: caps}
 }
 
 func (a *adapterSurface) view(ctx context.Context) (*adapterView, error) {
@@ -182,7 +197,11 @@ func (a *adapterSurface) view(ctx context.Context) (*adapterView, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &adapterView{adapterSurface: a, scope: scope}
+	caps, err := a.currentCapabilities(ctx)
+	if err != nil {
+		return nil, err
+	}
+	v := &adapterView{adapterSurface: a, scope: scope, Capabilities: caps}
 	root := a.root
 	v.server = &Server{usage: a.Usage, uploads: a.Uploads, expected: root.expected, events: root.events,
 		payloads: root.payloads, layer: "adapter-" + a.ID, createLayer: root.createLayer, hostname: root.hostname,

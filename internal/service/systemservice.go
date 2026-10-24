@@ -141,7 +141,7 @@ func serveSystemService(options systemServiceOptions) error {
 		return err
 	}
 	var attachments *uploads.Store
-	if desktopEnabled {
+	if desktopEnabled || hasConfiguredSource(ids, codexCLISource) || hasConfiguredSource(ids, claudeCodeSource) {
 		attachments, err = uploads.New(filepath.Join(filepath.Dir(workerTokenPath), "uploads"))
 		if err != nil {
 			worker.Close()
@@ -215,7 +215,7 @@ func serveSystemService(options systemServiceOptions) error {
 		}
 		desktopAdapter = desktopSourceAdapter(surface, scope, status, usage, attachments)
 	}
-	adapters := gatewaySourceAdapters(ids, worker, changes.changed, desktopAdapter)
+	adapters := gatewaySourceAdapters(ids, worker, changes.changed, desktopAdapter, attachments)
 	var httpServer *http.Server
 	shutdown := func() {
 		hub.Close()

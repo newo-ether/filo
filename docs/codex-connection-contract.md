@@ -41,6 +41,29 @@ Filo 不得修改 Codex 程序、启动路由、全局环境、原始会话或�
 对普通桌面或其后端发信号、杀同名进程、重写数据库、注入核心代码、全局重定向，以及
 把排队输入当作占位持久化均禁止。服务恢复不能重放创建、发送、设置或归档请求。
 
+## 原生 Codex CLI 终端
+
+普通启动的终端通过所选账户已经运行的官方共享 daemon 接入。默认连接原生 home 下
+`app-server-control/app-server-control.sock`，也可选择已存在的 `codexDaemonSocket`。
+Filo 只连接，不初始化、安装、启动或替换 daemon；嵌入式、无 daemon 会话保持不可遥控。
+首次准备原生 daemon 包由原版 Codex 自身完成，Filo 不代为执行。Codex 0.164.0 在隔离的
+普通 Windows TUI 上已通过精确 Send、运行中 steer、Stop/idle、模型和 effort 应用读回及
+加密 HTTP 验收。该证据不覆盖所有原生版本、service tier 或真实手机 UI。
+
+每次连接先验证同账户 peer 与原生 home。主列表最多读取 30 个 loaded ID，拒绝分页、
+子线程、身份不符和已卸载条目。Follow 在新连接上再次检查 loaded 身份与请求 scope；
+实时状态只读取一条最新 turn 摘要及原生通知。观察不能执行 thread/resume 或历史 List。
+失去准入即失去控制，关闭观察只关闭自己的连接，不终止原生进程。
+
+Send、运行中 steer、Stop 和设置复用该原生连接。输入必须有精确 client、原生 message
+及 turn 回执；Stop 必须先确认同一连接的精确活动回合，并取得该回合终态。设置必须有同
+任务的新鲜应用证据。空响应、传输 ACK、文本、时间或顺序都不能替代所需身份和应用读回。
+范围变化、断联或未知结果不能触发重试、换宿主或恢复未知历史。
+
+公开 `filo codex` launcher 已移除，生产控制构造不创建或回退旧 registry。隐藏的旧 owner
+入口及生命周期兼容代码继续保留，避免影响此前已接受的原生工作。wrapper 不是普通原生
+终端的前置要求；观察连接关闭和 Filo 升级都不能终止已接受的原生工作。
+
 ## New Chat 的交付条件
 
 空白输入页和键盘立即出现，不预创建任务；在显式 Send 时才进行网络操作。

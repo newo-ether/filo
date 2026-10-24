@@ -43,6 +43,8 @@ func TestMain(m *testing.M) {
 func runServiceHelperProcess(arguments []string) (int, bool) {
 	recordServiceHelperConsoleState()
 	switch os.Getenv(serviceHelperEnvironment) {
+	case "claude-metadata":
+		return runClaudeMetadataHelper(), true
 	case "console-exit":
 		return 0, true
 	case "guardian":

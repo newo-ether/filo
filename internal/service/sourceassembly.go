@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/newo-ether/filo/internal/claude"
 	"github.com/newo-ether/filo/internal/protocol"
 	"github.com/newo-ether/filo/internal/sessions"
 	"github.com/newo-ether/filo/internal/uploads"
@@ -71,9 +72,9 @@ func orderedPrivateAdapters(ids []string, optional []Adapter, desktop Adapter) [
 	return result
 }
 
-// CLI and Claude remain private selected-user readers. They share the public
-// server's payload/image/hub/upload budgets and never fall back to Desktop.
-func gatewaySourceAdapters(ids []string, worker *UserWorker, changed func(string, string), desktop Adapter) []Adapter {
+// Optional sources remain on their selected user's private source path. They
+// share the public budgets and never fall back to Desktop.
+func gatewaySourceAdapters(ids []string, worker *UserWorker, changed func(string, string), desktop Adapter, attachments *uploads.Store) []Adapter {
 	result := make([]Adapter, 0, len(ids))
 	for _, id := range ids {
 		if id == codexDesktopSource {
@@ -82,12 +83,34 @@ func gatewaySourceAdapters(ids []string, worker *UserWorker, changed func(string
 		}
 		sourceID := id
 		proxy := newUserSource(worker, id, func(session string) { changed(sourceID, session) })
-		family, caps := "codex", sourceHistoryCaps(false)
-		if id == claudeCodeSource {
-			family, caps = "claude", sourceHistoryCaps(true)
+		family, origin, caps := "codex", "cli", desktopSourceCapabilities(attachments != nil)
+		var store *uploads.Store
+		if id == codexCLISource || id == claudeCodeSource {
+			// Only controlled sources receive path references. Claude additionally
+			// proves its native upload-directory permission in session access.
+			store = attachments
+			proxy.attachments = store != nil
+		} else {
+			caps.Uploads = false
 		}
-		result = append(result, Adapter{ID: id, Family: family, Origin: "cli", Scope: proxy.scope,
-			Sessions: proxy, Status: proxy.status, Capabilities: caps})
+		// Codex CLI renames/archives only Filo-created tasks; per-session access narrows it.
+		if id == claudeCodeSource {
+			family, caps = "claude", claude.ExecutionCapabilities()
+			caps.ActiveSend = claude.Capabilities().ActiveSend
+			caps.Uploads = store != nil
+		}
+		if id == claudeDesktopSource {
+			family, caps = "claude", claude.Capabilities()
+		}
+		if id == claudeDesktopSource {
+			origin = "desktop"
+		}
+		var usage func(context.Context) (protocol.AccountUsage, error)
+		if id == codexCLISource {
+			usage = proxy.Usage
+		}
+		result = append(result, Adapter{ID: id, Family: family, Origin: origin, Scope: proxy.scope,
+			Sessions: proxy, StatusSource: proxy.status, Capabilities: caps, CapabilitySource: proxy.capabilities, Usage: usage, Uploads: store})
 	}
 	return result
 }

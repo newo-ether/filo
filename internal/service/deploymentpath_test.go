@@ -7,7 +7,7 @@ import (
 
 func TestPackagedExecutorFindsSiblingScriptsAndGuardian(t *testing.T) {
 	release := filepath.Join(t.TempDir(), "release with spaces")
-	executable := filepath.Join(release, "tools", "filo.exe")
+	executable := filepath.Join(release, "bin", "filo.exe")
 	if got := rootForExecutable(executable); got != release {
 		t.Fatalf("packaged root = %q, want %q", got, release)
 	}

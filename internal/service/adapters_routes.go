@@ -67,8 +67,21 @@ func (v *adapterView) route(w *tracking, r *http.Request, path string) error {
 		return v.upload(w, r, path)
 	}
 	id, action, ok := sessionRoute(path)
-	if !ok || !validSessionRef(id) || action == "access" {
+	if !ok || !validSessionRef(id) {
 		return v.server.respond(w, http.StatusNotFound, errorResponse{Error: "Not found"})
+	}
+	if action == "access" {
+		if r.Method != http.MethodGet || v.root.layer != "worker" {
+			return v.server.respond(w, http.StatusNotFound, errorResponse{Error: "Not found"})
+		}
+		if r.URL.Query().Get("nativeScopeId") != v.scope {
+			return CodexRpcError("Native source identity changed; refresh sources", -32600)
+		}
+		access, err := v.access(ctx, id)
+		if err != nil {
+			return err
+		}
+		return v.server.respond(w, http.StatusOK, access)
 	}
 	if r.Method == http.MethodPost {
 		return v.mutate(w, r, id, action)
@@ -202,7 +215,7 @@ func (v *adapterView) create(w *tracking, r *http.Request) error {
 	if _, present := input["accessBinding"]; present {
 		return CodexRpcError("A new session cannot carry an existing binding", -32602)
 	}
-	if err := v.attachments(input); err != nil {
+	if err := v.attachments(input, v.Capabilities); err != nil {
 		return err
 	}
 	text, clientID, err := v.server.messageText(input)
@@ -285,7 +298,7 @@ func (v *adapterView) mutate(w *tracking, r *http.Request, id, action string) er
 	if !allowed {
 		return v.unsupported(w)
 	}
-	if err := v.attachments(input); err != nil {
+	if err := v.attachments(input, caps); err != nil {
 		return err
 	}
 	ctx := protocol.WithNativeScopeID(protocol.WithAccessBinding(protocol.WithScopeValidation(r.Context(), v.check), binding), v.scope)
@@ -316,13 +329,13 @@ func settingsAllowed(input map[string]any, caps protocol.AdapterCapabilities) er
 	return nil
 }
 
-func (v *adapterView) attachments(input map[string]any) error {
+func (v *adapterView) attachments(input map[string]any, caps protocol.AdapterCapabilities) error {
 	raw, present := input["attachments"]
 	if !present {
 		return nil
 	}
-	if !v.Capabilities.Uploads {
-		return CodexRpcError("Attachments are unsupported by this source", -32602)
+	if !caps.Uploads {
+		return CodexRpcError("Attachments are unsupported by this source/session", -32602)
 	}
 	items, ok := raw.([]any)
 	if !ok || len(items) > 16 {

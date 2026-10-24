@@ -68,6 +68,9 @@ func mergeTaskMetadata(page *protocol.ConversationPage, live protocol.Conversati
 		return
 	}
 	current := *page.Runtime
+	if persisted.Title != nil {
+		current.Title = persisted.Title
+	}
 	if current.ContextTokens == nil {
 		current.ContextTokens = persisted.ContextTokens
 	}

@@ -56,6 +56,9 @@ type ExecutorProcessOptions struct {
 	// DesktopRuntime resolves the native app server executable. Nil selects
 	// `scripts/resolve-desktop-runtime.ps1`.
 	DesktopRuntime func() (string, error)
+	// CLIRuntime resolves only the selected user's independently installed CLI.
+	// It is used exclusively by explicitly marked codex-cli executors.
+	CLIRuntime func() (string, error)
 	// Guardian publishes lifetime protection for the native child. Nil selects
 	// the installed `tools/FiloBackground.exe` monitor.
 	Guardian func(directory string) (*NativeGuardian, error)
@@ -106,11 +109,16 @@ func RunTaskExecutorWith(options ExecutorProcessOptions) error {
 	if err := lifecycle.save(directory); err != nil {
 		return err
 	}
-	desktopRuntime := options.DesktopRuntime
-	if desktopRuntime == nil {
-		desktopRuntime = resolveDesktopRuntime
+	runtimeResolver := options.DesktopRuntime
+	if executorSource(config.Source) == codexCLISource {
+		runtimeResolver = options.CLIRuntime
+		if runtimeResolver == nil {
+			runtimeResolver = resolveCLIRuntime
+		}
+	} else if runtimeResolver == nil {
+		runtimeResolver = resolveDesktopRuntime
 	}
-	executable, err := desktopRuntime()
+	executable, err := runtimeResolver()
 	if err != nil {
 		return err
 	}

@@ -31,13 +31,14 @@ type taskSessionsCall struct {
 // answers the adapter's methods and scripts creation admission, active turns,
 // completion after a lost notification and refusals that must never be retried.
 type taskSessionsNative struct {
-	mu        sync.Mutex
-	recorded  []taskSessionsCall
-	active    bool
-	owned     bool
-	finished  bool
-	failSend  bool
-	failSteer bool
+	mu         sync.Mutex
+	recorded   []taskSessionsCall
+	active     bool
+	owned      bool
+	finished   bool
+	failSend   bool
+	failSteer  bool
+	failAttach bool
 
 	writeMu sync.Mutex
 	read    *io.PipeReader
@@ -92,7 +93,7 @@ func (peer *taskSessionsNative) serve() {
 func (peer *taskSessionsNative) answer(method string, params map[string]any) (any, error) {
 	peer.mu.Lock()
 	active, finished := peer.active, peer.finished
-	failSend, failSteer := peer.failSend, peer.failSteer
+	failSend, failSteer, failAttach := peer.failSend, peer.failSteer, peer.failAttach
 	peer.mu.Unlock()
 	switch method {
 	case "thread/start":
@@ -105,6 +106,9 @@ func (peer *taskSessionsNative) answer(method string, params map[string]any) (an
 			"model": "m",
 		}, nil
 	case "thread/resume":
+		if failAttach {
+			return nil, errors.New("Native thread unloaded before resume")
+		}
 		return map[string]any{"model": "m"}, nil
 	case "thread/read":
 		status := "idle"
@@ -112,7 +116,9 @@ func (peer *taskSessionsNative) answer(method string, params map[string]any) (an
 			status = "active"
 		}
 		return map[string]any{"thread": map[string]any{"id": taskSessionsTaskID, "model": "m",
-			"status": map[string]any{"type": status}}}, nil
+			"cwd": "/fixture", "status": map[string]any{"type": status}}}, nil
+	case "thread/name/set", "thread/archive":
+		return map[string]any{}, nil
 	case "filo/task/state":
 		materialized := active || finished
 		state := map[string]any{"materialized": materialized, "hasUser": materialized}

@@ -44,7 +44,7 @@ func fixtureAdapter(t *testing.T) *Adapter {
 	return a
 }
 
-func bridgeCall(t *testing.T, a *Adapter, action string, body any) (int, bridgeResponse) {
+func bridgeCall(t *testing.T, a http.Handler, action string, body any) (int, bridgeResponse) {
 	t.Helper()
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -231,7 +231,7 @@ func TestBoundsLimitSessionsBodiesAndRows(t *testing.T) {
 	}
 	for i := 2; i <= maxSessions+1; i++ {
 		status, _ := bridgeCall(t, a, "register", registerRequest{SessionID: fmt.Sprintf("10000000-0000-4000-8000-%012d", i),
-			Instance: "test-instance", Origin: "desktop"})
+			Instance: "test-instance", Origin: "terminal"})
 		if i <= maxSessions && status != http.StatusOK || i > maxSessions && status != http.StatusConflict {
 			t.Fatal("session bound failed")
 		}
@@ -243,10 +243,14 @@ func TestBoundsLimitSessionsBodiesAndRows(t *testing.T) {
 	}
 }
 
-func TestNoMutationCapabilitiesOrImplicitCommands(t *testing.T) {
+func TestNoUnqualifiedMutationCapabilitiesOrImplicitCommands(t *testing.T) {
 	a := fixtureAdapter(t)
 	nonce := registerFixture(t, a, fixtureSession)
-	caps := a.Descriptor().Capabilities
+	access, err := a.Access(context.Background(), fixtureSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caps := access.Capabilities
 	if caps.Create || caps.IdleSend || caps.Stop || caps.Rename || caps.Archive || caps.Uploads || caps.ActiveSend != "unsupported" || len(caps.Settings) != 0 {
 		t.Fatal("unproven mutation capability")
 	}
