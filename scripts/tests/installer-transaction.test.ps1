@@ -1,217 +1,86 @@
 $ErrorActionPreference='Stop'
-. (Join-Path $PSScriptRoot '..\windows\Install-Support.ps1')
 . (Join-Path $PSScriptRoot '..\windows\Install-Transaction.ps1')
 function Assert($Value,$Message) { if (-not $Value) { throw $Message } }
-$fixture=Join-Path ([IO.Path]::GetTempPath()) ('filo-transaction-' + [guid]::NewGuid().ToString('N'))
-function Get-CimInstance {
-    param($ClassName,$Filter)
-    if ($ClassName -eq 'Win32_Service' -and $global:FiloFixtureService) {
-        [pscustomobject]@{StartName='LocalSystem';PathName=(Join-Path $caseRoot 'nssm.exe');State=$global:FiloFixtureServiceState}
-    } elseif ($ClassName -eq 'Win32_UserProfile') { [pscustomobject]@{SID=$client.Sid;Loaded=$true} }
-}
-function Get-ScheduledTask { param($TaskName,$ErrorAction) if($tasks.ContainsKey($TaskName)){[pscustomobject]@{State=$tasks[$TaskName]}} }
-function Export-ScheduledTask { param($TaskName) 'original-'+$TaskName }
-function Register-ScheduledTask { param($TaskName,$Xml,[switch]$Force) $tasks[$TaskName]='Ready'; $restored[$TaskName]=$Xml }
-function Unregister-ScheduledTask { param($TaskName,[switch]$Confirm) $tasks.Remove($TaskName) }
+$fixture=Join-Path ([IO.Path]::GetTempPath()) ('filo-transaction-'+[guid]::NewGuid().ToString('N'))
+$bundle=Join-Path $fixture 'bundle'; $root=Join-Path $fixture 'data'; $program=Join-Path $fixture 'Program Files\Filo'
+$worker=Join-Path $root 'agents\S-1-5-21-1-2-3-1001'; $state=Join-Path $root 'service'
 $events=[Collections.Generic.List[string]]::new()
-$caseCount=0
-function Start-ScheduledTask { param($TaskName) $events.Add('start-task:'+ $TaskName); $tasks[$TaskName]='Running' }
-function Stop-ScheduledTask { param($TaskName) $tasks[$TaskName]='Ready' }
-function Stop-Process { throw 'Fixture must never signal any real process' }
-function Stop-Service { param($Name) $events.Add('stop-service'); $global:FiloFixtureServiceState='Stopped' }
-function Start-Service { param($Name) $events.Add('start-service'); $global:FiloFixtureServiceState='Running' }
-function Get-Service {
-    param($Name,$ErrorAction)
-    if($global:FiloFixtureService){ $value=[pscustomobject]@{Status=$global:FiloFixtureServiceState}; $value | Add-Member ScriptMethod WaitForStatus {}; $value }
-}
-function Get-ItemProperty { param($LiteralPath) [pscustomobject]@{AppDirectory=$runtime;Application=(Join-Path $runtime 'tools\filo.exe');AppParameters='system-service "prior-state"'} }
-function Install-FiloRuntime { param($Bundle) $Bundle }
+$client=[pscustomobject]@{Name='Selected native clients';Profile=(Join-Path $fixture 'user');Sid='S-1-5-21-1-2-3-1001'}
+$script:failReadiness=$false; $script:componentFailure=$false
+function Get-FiloProgramRoot { $program }
+function Get-CimInstance { param($ClassName) if ($ClassName -eq 'Win32_UserProfile') { [pscustomobject]@{Special=$false;LocalPath=$client.Profile} } }
+function Stop-FiloInstalledResources { $events.Add('stop') }
+function Remove-FiloFirewallRules { $events.Add('firewall-remove') }
 function Protect-FiloDirectory { param($Path,$UserSid) New-Item -ItemType Directory -Path $Path -Force | Out-Null }
-function New-FiloTaskAction { param($Runtime,$State,$Role,$Workspace) $Role }
-function Register-FiloUserTask {
-    param($Name,$Action,$Sid)
-    if(($failurePoint -eq 'register-host-before' -and $Name -eq 'Filo-Standalone-Host') -or
-        ($failurePoint -eq 'register-gateway-before' -and $Name -eq 'Filo-User-Agent')) { throw 'Injected registration failure before mutation' }
-    $tasks[$Name]='Ready'
-    if($failurePoint -eq 'register' -and $Name -eq 'Filo-User-Agent'){throw 'Injected registration failure'}
-}
+function Grant-FiloDirectoryRead { param($Path,$UserSid) New-Item -ItemType Directory -Path $Path -Force | Out-Null }
+function New-FiloTaskOptions { param($Sid) @{Sid=$Sid} }
+function New-FiloTaskAction { param($Runtime,$State,$Role,$Workspace) Assert (Test-Path (Join-Path $Runtime 'bin\FiloBackground.exe')) 'Task requires the installed fixed entry'; @{Role=$Role} }
+function Register-FiloUserTask { param($Name,$Action,$Sid,$Options) $events.Add('register-'+$Name) }
+function Start-ScheduledTask { param($TaskName) $events.Add('start-'+$TaskName) }
+function Update-FiloMachinePath { param($ProgramRoot) Assert ($ProgramRoot -eq $program) 'PATH uses Program Files'; $events.Add('path') }
+function New-NetFirewallRule { $events.Add('firewall-add') }
 function Wait-FiloEndpoint {
-    param($Url,$TokenPath,$Mode,$Seconds)
-    if($failurePoint -in @('helper','shutdown') -and $Mode -eq 'standalone'){throw 'Injected helper failure'}
-    if($failurePoint -eq 'ready' -and $Mode -eq 'existing'){throw 'Injected readiness failure'}
+    param($Url,$TokenPath,$Mode,$Seconds,$FiloPath)
+    $events.Add('health-'+$Mode)
+    Assert (Test-Path $TokenPath) 'Health check requires installed credentials'
+    if ($FiloPath) { Assert ($FiloPath -eq (Join-Path $program 'bin\filo.exe')) 'Public health uses fixed executable' }
+    if ($script:failReadiness) { throw 'Injected health failure' }
 }
-function Get-NetTCPConnection { @() }
-function Get-FiloWorkerUpdatePlan {
-    param($StateDirectory,$Revision)
-    if($Revision -eq ''){
-        [pscustomobject]@{WasRunning=($tasks['Filo-User-Agent'] -eq 'Running');StateDirectory=$StateDirectory;Candidate=$true}
-    } else {
-        $events.Add('worker-preflight')
-        if($failurePoint -eq 'worker-preflight'){throw 'Injected worker preflight failure'}
-        [pscustomobject]@{WasRunning=($tasks['Filo-User-Agent'] -eq 'Running');Launch=[pscustomobject]@{workspaceDirectory=$caseRoot};Candidate=$false}
-    }
+function New-FiloClaudeComponentPlan {
+    param($Bundle,$Worker,$Profile,$Sid,$Sources)
+    if ($script:componentFailure) { throw 'Injected component ownership failure' }
+    [pscustomobject]@{Sources=$Sources}
 }
-function Request-FiloWorkerStop {
-    param($Plan)
-    if($Plan.Candidate){
-        Assert ([IO.File]::ReadAllText((Join-Path $worker 'launch.json')) -match 'runtimeDirectory') 'Candidate stops before prior config bytes are restored'
-        if($failurePoint -eq 'shutdown'){throw 'Injected safe shutdown refusal'}
-        $script:candidateStopped=$true
-    } else {
-        $events.Add('stop-worker')
-        if($failurePoint -eq 'old-shutdown'){throw 'Injected original safe shutdown refusal'}
-    }
-    $tasks['Filo-User-Agent']='Ready'
-    if(-not $Plan.Candidate -and $failurePoint -eq 'old-shutdown-after-stop'){throw 'Injected failure after original worker stopped'}
-}
-function Wait-FiloWorkerStopped { $script:candidateStopped=$true }
-function Get-FiloHostPlan {
-    $candidateConfig=Test-Path -LiteralPath (Join-Path $worker 'launch.json')
-    if($candidateConfig){$candidateConfig=[IO.File]::ReadAllText((Join-Path $worker 'launch.json')) -match 'runtimeDirectory'}
-    if(-not $candidateConfig){
-        $events.Add('host-preflight')
-        if($failurePoint -eq 'host-preflight'){throw 'Injected host preflight failure'}
-        if($failurePoint -eq 'host-race' -and $events.Contains('stop-worker')){throw 'Injected late native activity'}
-    }
-    if($tasks.ContainsKey('Filo-Standalone-Host')){[pscustomobject]@{WasRunning=($tasks['Filo-Standalone-Host'] -eq 'Running')}}
-}
-function Stop-FiloHost { param($Plan) if($Plan){$events.Add('stop-host'); $tasks['Filo-Standalone-Host']='Ready'} }
+function Install-FiloClaudeComponents { param($Plan) $events.Add('components') }
 try {
-    foreach($initialState in @('Absent','Stopped','Running','Paused','Stop Pending')) {
-        $upgrade=$initialState -ne 'Absent'
-        $shouldRun=$initialState -in @('Running','Paused')
-        $points=@('none','register-host-before','register-gateway-before','register','helper','service','ready','shutdown')
-        if($upgrade){$points+=@('worker-preflight','host-preflight','old-shutdown','old-shutdown-after-stop','host-race')}
-        foreach($failurePoint in $points) {
-            $caseCount++
-            $events.Clear()
-            $caseRoot=Join-Path $fixture ($initialState+'-'+$failurePoint)
-            $runtime=Join-Path $caseRoot 'runtime'; $state=Join-Path $caseRoot 'service'; $worker=Join-Path $caseRoot 'worker'
-            New-Item -ItemType Directory -Path (Join-Path $runtime 'scripts'),(Join-Path $runtime 'tools'),$state,$worker -Force | Out-Null
-            [IO.File]::WriteAllText((Join-Path $runtime 'tools/nssm.exe'),'fixture - never executed')
-            [IO.File]::WriteAllText((Join-Path $runtime 'scripts/system-service.ps1'),@'
-param($Action,$RuntimeDirectory,$StateDirectory,$FiloPath,$WrapperPath,
-$RestoreApplication,$RestoreAppDirectory,$RestoreAppParameters,[switch]$RestoreStart)
-if($Action -eq 'Uninstall'){$global:FiloFixtureService=$false;return}
-if($Action -eq 'Install' -and $global:FiloFixtureFailure -eq 'service'){throw 'Injected service failure'}
-$global:FiloFixtureService=$true
-if($Action -eq 'Restore'){$global:FiloFixtureRestore=@($RestoreApplication,$RestoreAppDirectory,$RestoreAppParameters)}
-if($Action -ne 'Restore' -or $RestoreStart){$global:FiloFixtureServiceState='Running'}
-'@)
-            $global:FiloFixtureService=$upgrade; $global:FiloFixtureServiceState=$initialState; $global:FiloFixtureFailure=$failurePoint
-            $global:FiloFixtureRestore=$null
-            $tasks=@{}; $restored=@{}; $script:candidateStopped=$false
-            $client=[pscustomobject]@{Sid='S-1-5-21-1-2-3-1001';Profile=$caseRoot;Name='Desktop-only fixture'}
-            $paths=@((Join-Path $state 'config.json'),(Join-Path $worker 'config.json'),(Join-Path $worker 'launch.json'))
-            $prior=@{}
-            if($upgrade) {
-                $prior[$paths[0]]='{"preserve":"prior state"}'
-                $prior[$paths[1]]='{"appServerUrl":"ws://127.0.0.1:28436","bind":"127.0.0.1","port":28437}'
-                $prior[$paths[2]]='{"appServerUrl":"ws://127.0.0.1:28436"}'
-                foreach($file in $paths){[IO.File]::WriteAllText($file,$prior[$file])}
-                $tasks['Filo-User-Agent']='Running'; $tasks['Filo-Standalone-Host']='Running'
-            }
-            $tokens=@((Join-Path $state 'token'),(Join-Path $worker 'token'))
-            foreach($file in $tokens){[IO.File]::WriteAllText($file,('a'*64))}
-            $tokenHashes=@{}; foreach($file in $tokens){$tokenHashes[$file]=(Get-FileHash -LiteralPath $file).Hash}
-            $nativeState=Join-Path $caseRoot 'native-auth-and-task.fixture'
-            [IO.File]::WriteAllText($nativeState,'Existing native account, credentials and task remain untouched')
-            $nativeHash=(Get-FileHash -LiteralPath $nativeState).Hash
-            $failed=$false
-            try { Invoke-FiloInstall $runtime @{revision=('b'*40)} $caseRoot $state $worker $client '127.0.0.1' 23456 | Out-Null }
-            catch { $failed=$true; if($_.Exception.Message -notmatch 'Injected'){throw} }
-            Assert ($failed -eq ($failurePoint -ne 'none')) "Expected outcome: $upgrade/$failurePoint"
-            foreach($file in $tokens){Assert ((Get-FileHash -LiteralPath $file).Hash -eq $tokenHashes[$file]) 'Existing credentials preserve exact bytes'}
-            Assert ((Get-FileHash -LiteralPath $nativeState).Hash -eq $nativeHash) 'Native account and task data are untouched'
-            if($failurePoint -in @('worker-preflight','host-preflight','old-shutdown','old-shutdown-after-stop','host-race')){
-                Assert (-not $events.Contains('stop-service') -and -not $events.Contains('start-service')) 'Rejected update never interrupts the SYSTEM gateway'
-                Assert (-not $events.Contains('stop-host')) 'Native host is never stopped on failed preflight or shutdown refusal'
-                Assert ($restored.Count -eq 0 -and -not $script:candidateStopped) 'Rejected preflight never enters candidate rollback'
-                foreach($file in $paths){Assert ([IO.File]::ReadAllText($file) -eq $prior[$file]) 'Rejected preflight preserves exact configuration bytes'}
-                Assert ($tasks['Filo-User-Agent'] -eq 'Running' -and $tasks['Filo-Standalone-Host'] -eq 'Running') 'Rejected update preserves original task availability'
-                continue
-            }
-            if($failurePoint -eq 'shutdown'){
-                Assert $failed 'Failed safe shutdown must fail the transaction'
-                Assert ($restored.Count -eq 0 -and -not $script:candidateStopped) 'Unsafe candidate prevents old task restoration'
-                Assert ([IO.File]::ReadAllText((Join-Path $worker 'launch.json')) -match 'runtimeDirectory') 'Failed shutdown preserves matching candidate configuration'
-                Assert ($tasks['Filo-User-Agent'] -eq 'Running') 'Active candidate cannot be force-stopped'
-                continue
-            }
-            if($failed) {
-                Assert ($script:candidateStopped -or -not $tasks.ContainsKey('Filo-User-Agent')) 'Candidate is confirmed stopped or was never registered'
-                Assert ($global:FiloFixtureService -eq $upgrade) 'Rollback preserves service existence'
-                Assert ($tasks.Count -eq $(if($upgrade){2}else{0})) 'Rollback restores prior task registrations'
-                foreach($file in $paths) {
-                    if($upgrade){Assert ([IO.File]::ReadAllText($file) -eq $prior[$file]) 'Rollback preserves exact configuration bytes'}
-                    else {Assert (-not(Test-Path -LiteralPath $file)) 'Failed first install leaves no partial config'}
-                }
-                if($upgrade){Assert ($global:FiloFixtureServiceState -eq $(if($shouldRun){'Running'}else{'Stopped'})) 'Rollback preserves running and stopping intent'}
-                if($upgrade -and $failurePoint -in @('service','ready')) {
-                    Assert ($global:FiloFixtureRestore[0] -eq (Join-Path $runtime 'tools\filo.exe')) 'Rollback reinstates the recorded application'
-                    Assert ($global:FiloFixtureRestore[1] -eq $runtime) 'Rollback reinstates the recorded directory'
-                    Assert ($global:FiloFixtureRestore[2] -eq 'system-service "prior-state"') 'Rollback reinstates the recorded parameters'
-                    if($shouldRun){Assert ($global:FiloFixtureServiceState -eq 'Running') 'A recorded running service is started again'}
-                }
-            } else {
-                Assert $global:FiloFixtureService 'Successful service installation'
-                $launch=Get-Content -Raw -LiteralPath (Join-Path $worker 'launch.json') | ConvertFrom-Json
-                Assert (-not $launch.PSObject.Properties['codexPath']) 'No persisted native executable path'
-                Assert ($launch.desktopSid -eq $client.Sid) 'Selected desktop account persists'
-                $helper=Get-Content -Raw -LiteralPath (Join-Path $worker 'config.json') | ConvertFrom-Json
-                $gateway=Get-Content -Raw -LiteralPath (Join-Path $state 'config.json') | ConvertFrom-Json
-                $nativePort=if($upgrade){28436}else{7436}
-                $workerPort=if($upgrade){28437}else{7437}
-                Assert ($launch.appServerUrl -eq "ws://127.0.0.1:$nativePort") 'Upgrade preserves native endpoint'
-                Assert ($helper.port -eq $workerPort -and $gateway.workerUrl -eq "http://127.0.0.1:$workerPort") 'Gateway and helper retain one consistent configured endpoint'
-            }
+    New-Item -ItemType Directory -Path (Join-Path $bundle 'tools'),(Join-Path $bundle 'scripts'),$client.Profile -Force | Out-Null
+    foreach ($name in @('filo.exe','nssm.exe','FiloBackground.exe')) { [IO.File]::WriteAllText((Join-Path $bundle ('tools\'+$name)),'fixture v1') }
+    [IO.File]::WriteAllText((Join-Path $bundle 'scripts\system-service.ps1'), 'param($Action,$RuntimeDirectory,$StateDirectory,$FiloPath,$WrapperPath); if ($Action -ne ''Install'') {throw ''Wrong service action''}')
+    $files=@(Get-ChildItem $bundle -Recurse -File | ForEach-Object { @{path=$_.FullName.Substring($bundle.Length+1);sha256=(Get-FileHash $_.FullName).Hash} })
+    $manifest=@{revision=('a'*40);files=$files}
+    Write-FiloJson (Join-Path $bundle 'manifest.json') $manifest
+    $options=[pscustomobject]@{Sources=@('codex-desktop','claude-code');CodexDaemonSocket='';ClaudeBridgePort=7438}
+    $arguments=@{Bundle=$bundle;Manifest=$manifest;Root=$root;State=$state;Worker=$worker;Client=$client;Bind='127.0.0.1';Port=7435;SourceOptions=$options}
+    New-Item -ItemType Directory -Path $state,$worker -Force | Out-Null
+    Write-FiloJson (Join-Path $state 'config.json') @{bind='127.0.0.1';port=9999}
+    Write-FiloJson (Join-Path $worker 'config.json') @{port=9998;claudeBridgePort=9997}
+    [IO.File]::WriteAllText((Join-Path $state 'token'),'obsolete legacy token')
+    [IO.File]::WriteAllText((Join-Path $worker 'old-state.txt'),'do not migrate')
+    $freshOptions=Get-FiloSourceOptions $worker @('claude-code') '' $false 7438 $false 7435 -IgnoreExisting
+    Assert ($freshOptions.ClaudeBridgePort -eq 7438) 'Legacy worker settings are not adopted'
+    foreach ($pass in @(1,2)) {
+        $events.Clear()
+        foreach ($directory in @(Get-FiloLegacyDirectories $root @($client.Profile)) + @((Join-Path $root 'qualification-deadbeef'))) {
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            [IO.File]::WriteAllText((Join-Path $directory 'obsolete.txt'),'old version')
         }
+        Invoke-FiloInstall @arguments | Out-Null
+        Assert (($events[0..1] -join ',') -eq 'stop,firewall-remove') 'Old restart sources stop before file replacement'
+        Assert (Test-Path (Join-Path $program 'bin\filo.exe')) 'Fixed command exists'
+        Assert (-not (Test-Path (Join-Path $program 'tools'))) 'Installed payload has no second tools binary directory'
+        foreach ($directory in @(Get-FiloLegacyDirectories $root @($client.Profile))) { Assert (-not (Test-Path $directory)) 'Legacy directories are removed every run' }
+        Assert (-not (Test-Path (Join-Path $worker 'old-state.txt'))) 'Old private state is removed, never migrated'
+        Assert ([IO.File]::ReadAllText((Join-Path $state 'token')) -cne 'obsolete legacy token') 'Legacy credentials are not adopted'
+        $saved=Get-Content (Join-Path $state 'config.json') -Raw | ConvertFrom-Json
+        Assert ($saved.layoutVersion -eq 1 -and $saved.workerTokenPath -eq (Join-Path $worker 'token')) 'Private paths are fixed and layout is marked'
+        $launch=Get-Content (Join-Path $worker 'launch.json') -Raw | ConvertFrom-Json
+        Assert ($launch.runtimeDirectory -eq $program -and $launch.sources.Count -eq 2) 'Runtime and source selection survive publication'
+        Assert ($events.Contains('start-Filo-Standalone-Host') -and $events.Contains('start-Filo-User-Agent')) 'Both selected user tasks start'
+        Assert ($events.Contains('health-standalone') -and $events.Contains('health-existing')) 'Worker and public authentication are verified'
+        $token=[IO.File]::ReadAllText((Join-Path $state 'token'))
+        if ($pass -eq 1) { $firstToken=$token } else { Assert ($token -ceq $firstToken) 'New-layout reinstall keeps the access token' }
     }
-    foreach ($sourceSet in @(@('codex-cli'),@('claude-code'),@('codex-cli','claude-code'),@('codex-desktop','codex-cli','claude-code'))) {
-        $caseCount++
-        $failurePoint='none'
-        $caseRoot=Join-Path $fixture ('sources-'+($sourceSet -join '-'))
-        $runtime=Join-Path $caseRoot 'runtime'; $state=Join-Path $caseRoot 'service'; $worker=Join-Path $caseRoot 'worker'
-        New-Item -ItemType Directory -Path (Join-Path $runtime 'scripts'),(Join-Path $runtime 'tools'),$state,$worker -Force | Out-Null
-        [IO.File]::WriteAllText((Join-Path $runtime 'tools/nssm.exe'),'fixture - never executed')
-        [IO.File]::WriteAllText((Join-Path $runtime 'scripts/system-service.ps1'),@'
-param($Action,$RuntimeDirectory,$StateDirectory,$FiloPath,$WrapperPath,$RestoreApplication,$RestoreAppDirectory,$RestoreAppParameters,[switch]$RestoreStart)
-if($Action -eq 'Install' -and $global:FiloFixtureFailure -eq 'service'){throw 'Injected service failure'}
-$global:FiloFixtureService=$true; $global:FiloFixtureServiceState='Running'
-'@)
-        $global:FiloFixtureService=$false; $global:FiloFixtureServiceState='Stopped'; $global:FiloFixtureFailure='none'
-        $tasks=@{}; $restored=@{}; $events.Clear(); $script:candidateStopped=$false
-        $client=[pscustomobject]@{Sid='S-1-5-21-1-2-3-1001';Profile=$caseRoot;Name='Native sources fixture';Sources=$sourceSet}
-        Invoke-FiloInstall $runtime @{revision=('b'*40)} $caseRoot $state $worker $client '127.0.0.1' 23456 | Out-Null
-        $helper=Get-Content -Raw -LiteralPath (Join-Path $worker 'config.json') | ConvertFrom-Json
-        $gateway=Get-Content -Raw -LiteralPath (Join-Path $state 'config.json') | ConvertFrom-Json
-        $launch=Get-Content -Raw -LiteralPath (Join-Path $worker 'launch.json') | ConvertFrom-Json
-        Assert (($helper.sources -join ',') -eq ($sourceSet -join ',')) 'Worker persists exact selected sources'
-        Assert (($gateway.sources -join ',') -eq ($sourceSet -join ',') -and ($launch.sources -join ',') -eq ($sourceSet -join ',')) 'Gateway and launcher share selected sources'
-        Assert ($tasks.ContainsKey('Filo-Standalone-Host') -eq ($sourceSet -contains 'codex-desktop')) 'Only Desktop selection registers a native Host task'
-        if ($sourceSet -notcontains 'codex-desktop') {
-            Assert (-not $helper.PSObject.Properties['appServerUrl'] -and -not $launch.PSObject.Properties['appServerUrl']) 'CLI/Claude-only does not claim Desktop or auxiliary endpoint'
-            Assert (-not $events.Contains('start-task:Filo-Standalone-Host')) 'CLI/Claude-only never starts Host'
-        }
-        $modPath=Join-Path $worker 'claude-mod.json'
-        if ($sourceSet -contains 'claude-code') {
-            $modConfig=Get-Content -LiteralPath $modPath -Raw | ConvertFrom-Json
-            Assert ($modConfig.url -eq 'http://127.0.0.1:7438/claude-mod/v1/') 'Mod config uses frozen bridge prefix'
-            Assert ($modConfig.tokenFile -eq (Join-Path $worker 'claude-mod-token')) 'Mod uses the distinct selected-user token file'
-            Assert ([IO.File]::ReadAllText($modConfig.tokenFile) -ne [IO.File]::ReadAllText((Join-Path $state 'token'))) 'Mod token is not the public token'
-            $beforeMod=[IO.File]::ReadAllText($modPath)
-            $beforeToken=[IO.File]::ReadAllText($modConfig.tokenFile)
-            $global:FiloFixtureFailure='service'
-            $failurePoint='service'
-            $failed=$false
-            try { Invoke-FiloInstall $runtime @{revision=('c'*40)} $caseRoot $state $worker $client '127.0.0.1' 23456 | Out-Null } catch { $failed=$_.Exception.Message -match 'Injected' }
-            Assert $failed 'Failed multi-source upgrade is reported'
-            Assert ([IO.File]::ReadAllText($modPath) -ceq $beforeMod -and [IO.File]::ReadAllText($modConfig.tokenFile) -ceq $beforeToken) 'Failed upgrade preserves exact Mod config and token'
-        } else { Assert (-not (Test-Path -LiteralPath $modPath)) 'CLI-only never creates Mod config or token' }
-    }
-    "PASS: $caseCount install/update cases cover native source selection, preflight, admission race, partial registration, authenticated startup and rollback"
-} finally {
-    $safe=Assert-FiloPrivatePath $fixture ([IO.Path]::GetTempPath())
-    if(Test-Path -LiteralPath $safe){Remove-Item -LiteralPath $safe -Recurse -Force}
-    Remove-Variable FiloFixtureService,FiloFixtureServiceState,FiloFixtureFailure,FiloFixtureRestore -Scope Global -ErrorAction SilentlyContinue
-}
+    $events.Clear(); $script:componentFailure=$true; $rejected=$false
+    try { Invoke-FiloInstall @arguments | Out-Null } catch { $rejected=$_.Exception.Message -match 'ownership' }
+    Assert ($rejected -and $events.Count -eq 0) 'Invalid component ownership fails before interruption'
+    $script:componentFailure=$false; $script:failReadiness=$true; $events.Clear(); $rejected=$false
+    try { Invoke-FiloInstall @arguments | Out-Null } catch { $rejected=$_.Exception.Message -match 'Injected health failure' }
+    Assert ($rejected -and $events[$events.Count-1] -eq 'stop') 'Readiness failure is explicit and leaves resources stopped'
+    $script:failReadiness=$false; $events.Clear()
+    $arguments.SourceOptions=[pscustomobject]@{Sources=@('codex-cli');CodexDaemonSocket='';ClaudeBridgePort=7438}
+    Invoke-FiloInstall @arguments | Out-Null
+    Assert (-not $events.Contains('register-Filo-Standalone-Host')) 'CLI-only install creates no Desktop host'
+    Assert ($events.Contains('health-multi-source')) 'Non-Desktop health checks use multi-source mode'
+    Assert (-not (Test-Path (Join-Path $worker 'claude-mod.json'))) 'Deselection removes obsolete observer settings'
+    'PASS: fixed payload, two reinstall passes, residual cleanup, token continuity, source tasks, preflight and failed-health shutdown'
+} finally { if (Test-Path $fixture) { Remove-Item $fixture -Recurse -Force } }

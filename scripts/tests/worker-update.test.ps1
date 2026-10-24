@@ -6,11 +6,12 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('filo-worker-update-' + [guid]:
 New-Item -ItemType Directory -Path $fixture | Out-Null
 $script:action = [pscustomobject]@{Execute='powershell.exe';Arguments='old-gateway';WorkingDirectory=$fixture}
 $script:taskState = 'Running'; $script:capable = $false; $script:shutdowns = 0; $script:starts = 0
-$script:listeners = @(); $script:gateway = $null
+$script:listeners = @([pscustomobject]@{OwningProcess=7330}); $script:gateway = $null; $script:taskStops = 0
 $script:taskNames = [Collections.Generic.List[string]]::new()
 function Get-ScheduledTask { param($TaskName) $script:taskNames.Add($TaskName); return [pscustomobject]@{State=$script:taskState;Actions=@($script:action)} }
 function New-ScheduledTaskAction { param($Execute,$Argument,$WorkingDirectory) return [pscustomobject]@{Execute=$Execute;Arguments=$Argument;WorkingDirectory=$WorkingDirectory} }
 function Set-ScheduledTask { param($TaskName,$Action) $script:taskNames.Add($TaskName); $script:action=$Action }
+function Stop-ScheduledTask { param($TaskName) $script:taskNames.Add($TaskName); $script:taskStops++; $script:taskState='Ready' }
 function Start-ScheduledTask { param($TaskName) $script:taskNames.Add($TaskName); $script:starts++; $script:taskState='Running' }
 function Get-NetTCPConnection { param($LocalAddress,$LocalPort,$State,$ErrorAction) return $script:listeners }
 function Get-CimInstance { param($ClassName,$Filter) return $script:gateway }
@@ -34,8 +35,8 @@ function Invoke-RestMethod {
 }
 try {
     $newRuntime=Join-Path $fixture 'new-runtime'
-    New-Item -ItemType Directory -Path (Join-Path $newRuntime 'tools') | Out-Null
-    [IO.File]::WriteAllText((Join-Path $newRuntime 'tools\FiloBackground.exe'),'fixture - never executed')
+    New-Item -ItemType Directory -Path (Join-Path $newRuntime 'bin') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $newRuntime 'bin\FiloBackground.exe'),'fixture - never executed')
     [IO.File]::WriteAllText((Join-Path $fixture 'token'), ('a' * 64))
     Write-FiloJson (Join-Path $fixture 'config.json') @{bind='127.0.0.1';port=28437}
     Write-FiloJson (Join-Path $fixture 'launch.json') @{revision=('a' * 40);nodePath='old-node';runtimeDirectory='old-runtime';codexPath='original-native';workspaceDirectory=$fixture}
@@ -51,7 +52,7 @@ try {
     Assert (-not $next.PSObject.Properties['nodePath']) 'Upgrade drops the retired Node entry point'
     Assert ((Get-FiloGatewayExpectation $next).Marker -eq 'standalone') 'The migrated record expects the Go gateway'
     Assert ($script:shutdowns -eq 1 -and $script:starts -eq 1) 'One graceful replacement'
-    Assert ($script:action.Execute -eq (Join-Path $newRuntime 'tools\FiloBackground.exe') -and $script:action.Arguments.Contains('-Role Gateway')) 'New gateway uses the GUI entry in the staged runtime'
+    Assert ($script:action.Execute -eq (Join-Path $newRuntime 'bin\FiloBackground.exe') -and $script:action.Arguments.Contains('-Role Gateway')) 'New gateway uses the GUI entry in the staged runtime'
     Restore-FiloWorkerUpdate $plan
     $previous=Get-Content -LiteralPath (Join-Path $fixture 'launch.json') -Raw | ConvertFrom-Json
     Assert ($previous.revision -eq ('a' * 40) -and $script:action.Arguments -eq 'old-gateway') 'Rollback restores launch file and task action'
@@ -84,7 +85,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $fixture 'gateway.pid'), '7333')
     $script:taskState = 'Ready'
     $script:listeners = @([pscustomobject]@{OwningProcess=7333})
-    $goGateway = Join-Path $newRuntime 'tools\filo.exe'
+    $goGateway = Join-Path $newRuntime 'bin\filo.exe'
     $script:gateway = [pscustomobject]@{ExecutablePath=$goGateway;CommandLine=('"' + $goGateway + '" standalone "' + $fixture + '"')}
     $migrated = Get-FiloWorkerUpdatePlan $fixture ('b' * 40)
     Assert $migrated.WasRunning 'A Go gateway left by a stopped task is identified by its binary and role'
@@ -96,6 +97,16 @@ try {
     Assert $rejected 'A Go-shaped listener that does not match the private lease must be rejected'
     Assert ($script:shutdowns -eq 4 -and $script:starts -eq 4) 'Go-listener rejection must not mutate'
     Assert ($null -eq (Get-FiloWorkerUpdatePlan $fixture ('a' * 40))) 'Matching runtime is not restarted'
+
+    # A running task whose supervisor is only retrying (no listener, no live lease) is not serving.
+    # The installer must finish the upgrade on its own instead of failing on /v1/info.
+    Remove-Item -LiteralPath (Join-Path $fixture 'gateway.pid') -Force
+    $script:taskState = 'Running'; $script:listeners = @(); $script:capable = $false
+    $retrying = Get-FiloWorkerUpdatePlan $fixture ('b' * 40)
+    Assert ($retrying.WasRunning -and -not $retrying.Serving) 'A retrying supervisor is identified as not serving'
+    Start-FiloWorkerUpdate $retrying $newRuntime ('b' * 40)
+    Assert ($script:taskStops -eq 1 -and $script:shutdowns -eq 4 -and $script:starts -eq 5) 'A retrying supervisor is stopped directly and the new gateway started'
+    Assert (-not (Test-Path -LiteralPath (Join-Path $fixture 'gateway.stop'))) 'The stop marker is removed'
 } finally {
     $safe=Assert-FiloPrivatePath $fixture ([IO.Path]::GetTempPath())
     Remove-Item -LiteralPath $safe -Recurse -Force

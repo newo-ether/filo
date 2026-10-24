@@ -3,7 +3,7 @@ param(
     [string]$RuntimeDirectory,
     [string]$StateDirectory = (Join-Path $env:ProgramData 'Filo\service'),
     [string]$FiloPath,
-    [string]$WrapperPath = (Join-Path $env:ProgramData 'Filo\nssm.exe'),
+    [string]$WrapperPath = (Join-Path $env:ProgramFiles 'Filo\bin\nssm.exe'),
     [ValidatePattern('^Filo(?:-Qualification-[a-f0-9]{8})?$')][string]$ServiceName = 'Filo',
     # Restore re-applies one service registration verbatim. A rollback must not
     # reproduce a previous release's command line from this release's rules: the
@@ -62,7 +62,8 @@ function Wait-GatewayReady {
                 $reply = ($response -join "`n") | ConvertFrom-Json
             }
             $current = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
-            if ($reply.protocolVersion -eq 2 -and $reply.sessionMode -eq 'existing' -and
+            $expectedMode=if ($config.PSObject.Properties['sources'] -and @($config.sources) -notcontains 'codex-desktop') { 'multi-source' } else { 'existing' }
+            if ($reply.protocolVersion -eq 2 -and $reply.sessionMode -eq $expectedMode -and
                 $current.StartName -eq 'LocalSystem' -and $current.State -eq 'Running') { return }
         } catch { }
         if ([DateTime]::UtcNow -ge $deadline) { break }
@@ -122,8 +123,9 @@ if ($Action -eq 'Restore') {
 }
 if (-not $RuntimeDirectory) { throw 'Provide the verified staged runtime directory' }
 $runtimePath = [IO.Path]::GetFullPath($RuntimeDirectory)
-if (-not $FiloPath) { $FiloPath = Join-Path $runtimePath 'tools\filo.exe' }
-if (-not $runtimePath.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw 'Runtime must stay in private Filo directory' }
+if (-not $FiloPath) { $FiloPath = Join-Path $runtimePath 'bin\filo.exe' }
+$programRoot=[IO.Path]::GetFullPath((Join-Path $env:ProgramFiles 'Filo'))
+if ($runtimePath -ine $programRoot -and $ServiceName -eq 'Filo') { throw 'Runtime must be the fixed Program Files Filo directory' }
 $entry = $FiloPath
 foreach ($path in @($entry, $WrapperPath, (Join-Path $statePath 'config.json'), (Join-Path $statePath 'token'))) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing Filo prerequisite: $path" }
@@ -141,14 +143,10 @@ if ($token -notmatch '^[0-9a-fA-F]{64}$' -or $config.workerUrl -notmatch '^http:
 if (-not (Test-FiloEntrypoint $FiloPath)) { throw 'Staged Filo entrypoint is invalid' }
 if ($Action -eq 'ValidateOnly') { Write-Output 'Filo SYSTEM prerequisites validated; no service mutation'; exit }
 if ($Action -eq 'Update' -and -not $existing) { throw 'Filo SYSTEM service does not exist' }
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$backup = Join-Path $root ('backups\' + $stamp)
-New-Item -ItemType Directory -Path $backup -Force | Out-Null
+# Service settings are held in memory for this invocation; no retained backups.
 $previous = $null
 $createdService = $false
 if ($existing) {
-    & reg.exe export ('HKLM\SYSTEM\CurrentControlSet\Services\' + $serviceName) (Join-Path $backup 'service.reg') /y | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Cannot preserve old Filo service registration' }
     $previous = Get-ItemProperty -LiteralPath "$serviceRegistry\Parameters"
     Stop-Gateway
 }

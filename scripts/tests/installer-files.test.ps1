@@ -59,8 +59,8 @@ try {
     $legacy = Join-Path $profile 'AppData\Local\FiloStandalone'
     Assert ((Get-FiloWorkerState $fixture $profile $sid '') -eq $shared) 'New worker state must avoid virtualized AppData'
     Assert ((Get-FiloWorkerState $fixture $profile $sid (Join-Path $shared 'token')) -eq $shared) 'Preserve shared state on update'
-    Assert ((Get-FiloWorkerState $fixture $profile $sid (Join-Path $legacy 'token')) -eq $legacy) 'Preserve existing worker state and token'
-    Rejects { Get-FiloWorkerState $fixture $profile $sid (Join-Path $fixture 'other-user\token') }
+    Assert ((Get-FiloWorkerState $fixture $profile $sid (Join-Path $legacy 'token')) -eq $shared) 'Old AppData state is never adopted'
+    Assert ((Get-FiloWorkerState $fixture $profile $sid (Join-Path $fixture 'other-user\token')) -eq $shared) 'Worker path derives only from the selected account'
     Rejects { Get-FiloWorkerState $fixture $profile '..\escape' '' }
     $tokenPath = Join-Path $fixture 'token'
     New-FiloToken $tokenPath
@@ -100,10 +100,10 @@ try {
     New-Item -ItemType Directory -Path $bundle | Out-Null
     $files = @()
     foreach ($relative in @('tools\filo.exe','scripts\system-service.ps1',
-        'scripts\windows\Desktop-Identity.ps1',
+        'scripts\windows\Desktop-Identity.ps1','scripts\windows\Claude-Identity.ps1','scripts\windows\Claude-Components.ps1',
         'scripts\resolve-desktop-runtime.ps1','scripts\windows\Desktop-Runtime.ps1',
         'scripts\windows\Host-Lifecycle.ps1',
-        'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Transaction.ps1',
+        'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Layout.ps1','scripts\windows\Install-Transaction.ps1',
         'scripts\windows\Uninstall-Transaction.ps1','scripts\windows\Service-State.ps1',
         'scripts\windows\Run-Standalone.ps1','scripts\windows\Worker-Update.ps1','tools\nssm.exe','tools\FiloBackground.exe',
         'scripts\windows\Source-Selection.ps1','internal\claude\mod\.claude-plugin\plugin.json',

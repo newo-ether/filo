@@ -1,5 +1,13 @@
 . (Join-Path $PSScriptRoot 'Install-Support.ps1')
 # Upgrade only the identified Filo auxiliary. Original desktop/backends are never targeted.
+function Test-FiloSupervisorCommandLine {
+    param([string]$CommandLine, [string]$RuntimeDirectory)
+    $script=Join-Path ([IO.Path]::GetFullPath($RuntimeDirectory)) 'scripts\windows\Run-Standalone.ps1'
+    $match=[regex]::Match($CommandLine,'(?i)(?:^|\s)-File\s+(?:"([^"]+)"|([^\s]+))')
+    if (-not $match.Success) { return $false }
+    $actual=if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    return $actual -ieq $script
+}
 function Get-FiloHostPlan {
     param([string]$StateDirectory, [string]$FiloPath, [string]$UserSid)
     $task=Get-ScheduledTask -TaskName 'Filo-Standalone-Host' -ErrorAction SilentlyContinue
@@ -14,21 +22,29 @@ function Get-FiloHostPlan {
         throw 'Existing host task is not the selected Filo auxiliary'
     }
     $peer=@(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $port -State Listen -ErrorAction SilentlyContinue)
-    $process=$null
+    $process=$null; $supervisor=$null
     if ($peer.Count) {
         if ($peer.Count -ne 1) { throw 'Ambiguous auxiliary listener' }
         $process=Get-CimInstance Win32_Process -Filter "ProcessId=$($peer[0].OwningProcess)"
         $parent=Get-CimInstance Win32_Process -Filter "ProcessId=$($process.ParentProcessId)"
         $owner=Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid
-        if ($owner.ReturnValue -ne 0 -or $owner.Sid -ne $UserSid -or
+        $parentOwner=if ($parent) { Invoke-CimMethod -InputObject $parent -MethodName GetOwnerSid }
+        $launch=Get-Content -LiteralPath (Join-Path $StateDirectory 'launch.json') -Raw | ConvertFrom-Json
+        $powershell=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (-not $parent -or $parentOwner.ReturnValue -ne 0 -or $parentOwner.Sid -ne $UserSid -or
+            $parent.ExecutablePath -ine $powershell -or
+            -not (Test-FiloSupervisorCommandLine ([string]$parent.CommandLine) $launch.runtimeDirectory) -or
+            $owner.ReturnValue -ne 0 -or $owner.Sid -ne $UserSid -or
             $process.Name -ine 'codex.exe' -or
             ([string]$process.CommandLine).IndexOf($endpoint,[StringComparison]::OrdinalIgnoreCase) -lt 0 -or
             ([string]$parent.CommandLine).IndexOf($StateDirectory,[StringComparison]::OrdinalIgnoreCase) -lt 0 -or
             [string]$parent.CommandLine -notmatch '-Role Host') { throw 'Auxiliary ownership could not be verified' }
         & $FiloPath 'probe-host-idle' $endpoint | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Native auxiliary is not verified idle; no process was stopped' }
+        $supervisor=$parent
     } elseif ($task.State -eq 'Running') { throw 'Auxiliary is still starting; retry after it settles' }
-    [pscustomobject]@{Task=$task;Action=$action;Process=$process;WasRunning=($task.State -eq 'Running');Changed=$false}
+    [pscustomobject]@{Task=$task;Action=$action;Process=$process;Supervisor=$supervisor;
+        WasRunning=($task.State -eq 'Running' -or $null -ne $process);Changed=$false}
 }
 
 function Stop-FiloHost {
@@ -44,7 +60,26 @@ function Stop-FiloHost {
             throw 'Auxiliary process identity changed before shutdown'
         }
     }
+    if ($Plan.Supervisor) {
+        $current=Get-CimInstance Win32_Process -Filter "ProcessId=$($Plan.Supervisor.ProcessId)"
+        if ($current -and ($current.CreationDate -ne $Plan.Supervisor.CreationDate -or
+            $current.ExecutablePath -ine $Plan.Supervisor.ExecutablePath -or $current.CommandLine -cne $Plan.Supervisor.CommandLine)) {
+            throw 'Auxiliary supervisor identity changed before shutdown'
+        }
+    }
     if ($Plan.WasRunning) { Stop-ScheduledTask -TaskName 'Filo-Standalone-Host' }
+    # A detached legacy supervisor can outlive its scheduler entry and respawn the child.
+    # Retire only this verified Filo script process, never its process tree.
+    if ($Plan.Supervisor) {
+        $current=Get-CimInstance Win32_Process -Filter "ProcessId=$($Plan.Supervisor.ProcessId)"
+        if ($current) {
+            if ($current.CreationDate -ne $Plan.Supervisor.CreationDate -or
+                $current.ExecutablePath -ine $Plan.Supervisor.ExecutablePath -or $current.CommandLine -cne $Plan.Supervisor.CommandLine) {
+                throw 'Auxiliary supervisor identity changed during shutdown'
+            }
+            Stop-Process -Id $current.ProcessId -Force -ErrorAction Stop
+        }
+    }
     if ($Plan.Process) {
         $current=Get-CimInstance Win32_Process -Filter "ProcessId=$($Plan.Process.ProcessId)"
         if ($current) {

@@ -62,7 +62,7 @@ function Get-FiloSourceOptions { param($Worker,$Sources,$Socket,$SocketSpecified
     New-Item -ItemType Directory -Path $statePath -Force | Out-Null
     $savedSid='S-1-5-21-1-2-3-1001'
     [IO.File]::WriteAllText((Join-Path $statePath 'config.json'),(@{
-        desktopSid=$savedSid; sources=@('codex-cli','claude-code'); bind='127.0.0.1';port=7435;workerTokenPath='fixture'
+        layoutVersion=1;desktopSid=$savedSid; sources=@('codex-cli','claude-code'); bind='127.0.0.1';port=7435;workerTokenPath='fixture'
     } | ConvertTo-Json))
     function Get-ItemPropertyValue { param($LiteralPath,$Name) $fixture }
     $global:FiloEntryClients=@()

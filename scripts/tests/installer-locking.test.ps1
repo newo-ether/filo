@@ -78,7 +78,7 @@ try {
     $global:FiloLockAdmin=$true
     # Model the winning installer writing fresh identity/endpoints before releasing its lock.
     $configPath=Join-Path $fixture 'state\config.json'
-    $latest=@{desktopSid=$global:FiloLockSid;bind='100.100.100.100';port=28435;workerTokenPath=(Join-Path $fixture 'legacy\token')}
+    $latest=@{layoutVersion=1;desktopSid=$global:FiloLockSid;bind='100.100.100.100';port=28435;workerTokenPath=(Join-Path $fixture 'agents\token')}
     [IO.File]::WriteAllText($configPath,($latest | ConvertTo-Json))
     $release.Set(); [void]$holder.EndInvoke($pending); $pending=$null
     Assert (-not $holder.HadErrors) 'Competing fixture installer must release the lock cleanly'

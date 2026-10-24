@@ -42,61 +42,34 @@ function Assert-FiloRuntimeCopy {
 
 function Resolve-FiloDesktopRuntime {
     param([Parameter(Mandatory=$true)][string]$UserSid,
-        [string]$CacheRoot = (Join-Path $env:LOCALAPPDATA 'Filo\runtimes'))
+        [string]$CacheRoot = (Join-Path $env:ProgramData ('Filo\agents\' + $UserSid + '\desktop-runtime')))
     if ($UserSid -notmatch '^S-1-(5-21|12-1)-[0-9-]+$' -or
         [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne $UserSid) {
         throw 'The desktop runtime must run as its selected Windows user, never as SYSTEM'
     }
-    $source = Get-FiloDesktopRuntimeSource $UserSid
-    $files = @(Get-FiloRuntimeFiles $source.Directory)
-    # This key invalidates Filo's private copy after any installed-package change.
-    # It is computed from the current package; there is no native version/hash allowlist.
-    $identity = [ordered]@{Source=$source.Directory;Files=$files} | ConvertTo-Json -Depth 5 -Compress
-    $hash = [Security.Cryptography.SHA256]::Create()
-    try { $key = ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity)))).Replace('-','').ToLowerInvariant() }
-    finally { $hash.Dispose() }
-    $cache = [IO.Path]::GetFullPath($CacheRoot).TrimEnd('\')
-    for ($part=$cache; $part; $part=Split-Path -Parent $part) {
+    $source=Get-FiloDesktopRuntimeSource $UserSid
+    $files=@(Get-FiloRuntimeFiles $source.Directory)
+    $target=[IO.Path]::GetFullPath($CacheRoot).TrimEnd('\')
+    for ($part=$target; $part; $part=Split-Path -Parent $part) {
         $item=Get-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
-        if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Runtime cache must not contain links' }
+        if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Runtime directory must not contain links' }
     }
-    New-Item -ItemType Directory -Path $cache -Force | Out-Null
-    $target = Join-Path $cache $key
-    $ready = $false
-    $candidates = @(Get-ChildItem -LiteralPath $cache -Directory | Where-Object {
-        $_.Name -eq $key -or $_.Name.StartsWith($key + '-') } | Sort-Object LastWriteTimeUtc -Descending)
-    foreach ($candidate in $candidates) {
-        try {
-            $target=$candidate.FullName
-            if ((Get-Item -LiteralPath $target).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linked runtime' }
-            $receipt=Get-Content -Raw -LiteralPath (Join-Path $target 'ready.json') | ConvertFrom-Json
-            if ($receipt.Identity -ne $identity) { throw 'Runtime source changed' }
-            Assert-FiloRuntimeCopy -Directory $target -Files $files
-            $ready=$true
-            break
-        } catch { $ready=$false }
+    # WindowsApps native executables may refuse external launch in place. Keep
+    # unchanged native components in one private ProgramData directory, not a
+    # user AppData cache or an ever-growing set of hash directories.
+    $ready=$false
+    if (Test-Path -LiteralPath $target) {
+        try { Assert-FiloRuntimeCopy $target $files; $ready=$true } catch { $ready=$false }
     }
     if (-not $ready) {
-        $target=Join-Path $cache $key
-        # WindowsApps executables may not be externally executable. Copy the unchanged
-        # native component set into Filo's own directory; never write Desktop's cache.
-        $stage=Join-Path $cache ('staging-' + [guid]::NewGuid().ToString('N'))
-        New-Item -ItemType Directory -Path $stage | Out-Null
-        try {
-            foreach ($file in $files) {
-                Copy-Item -LiteralPath (Join-Path $source.Directory $file.Name) -Destination (Join-Path $stage $file.Name)
-            }
-            Assert-FiloRuntimeCopy -Directory $stage -Files $files
-            $after=@(Get-FiloRuntimeFiles $source.Directory) | ConvertTo-Json -Compress
-            if ($after -ne ($files | ConvertTo-Json -Compress)) { throw 'Codex Desktop updated while preparing its runtime; retry' }
-            [IO.File]::WriteAllText((Join-Path $stage 'ready.json'),(@{Identity=$identity} | ConvertTo-Json),[Text.UTF8Encoding]::new($false))
-            if (Test-Path -LiteralPath $target) { $target += '-' + [guid]::NewGuid().ToString('N') }
-            Move-Item -LiteralPath $stage -Destination $target
-        } finally {
-            $safe=[IO.Path]::GetFullPath($stage)
-            if (-not $safe.StartsWith($cache + '\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe runtime staging path' }
-            if (Test-Path -LiteralPath $safe) { Remove-Item -LiteralPath $safe -Recurse -Force }
+        if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
+        New-Item -ItemType Directory -Path $target -Force | Out-Null
+        foreach ($file in $files) {
+            Copy-Item -LiteralPath (Join-Path $source.Directory $file.Name) -Destination (Join-Path $target $file.Name)
         }
+        Assert-FiloRuntimeCopy $target $files
+        $after=@(Get-FiloRuntimeFiles $source.Directory) | ConvertTo-Json -Compress
+        if ($after -cne ($files | ConvertTo-Json -Compress)) { throw 'Codex Desktop updated while preparing its runtime' }
     }
     [pscustomobject]@{Executable=(Join-Path $target 'codex.exe');Directory=$target;Application=$source.Application}
 }

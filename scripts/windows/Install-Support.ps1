@@ -4,7 +4,10 @@ function Test-FiloInstallAdministrator {
     return ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 function Get-FiloHelperEndpoints {
-    param([string]$StateDirectory)
+    param([string]$StateDirectory,[switch]$IgnoreExisting)
+    if ($IgnoreExisting) {
+        return [pscustomobject]@{NativeUrl='ws://127.0.0.1:7436';WorkerUrl='http://127.0.0.1:7437';WorkerPort=7437}
+    }
     $launchPath = Join-Path $StateDirectory 'launch.json'
     $configPath = Join-Path $StateDirectory 'config.json'
     $hasLaunch = Test-Path -LiteralPath $launchPath
@@ -44,11 +47,9 @@ function Get-FiloHelperEndpoints {
 function Get-FiloWorkerState {
     param([string]$Root, [string]$Profile, [string]$Sid, [string]$ExistingTokenPath)
     if ($Sid -notmatch '^S-1-(5-21|12-1)-[0-9-]+$') { throw 'Invalid desktop account SID' }
-    $shared = Join-Path $Root ('agents\' + $Sid)
-    $legacy = Join-Path $Profile 'AppData\Local\FiloStandalone'
-    if (-not $ExistingTokenPath -or $ExistingTokenPath -ieq (Join-Path $shared 'token')) { return $shared }
-    if ($ExistingTokenPath -ieq (Join-Path $legacy 'token')) { return $legacy }
-    throw 'Existing Filo configuration belongs to another account.'
+    # The selected account has one fixed private directory. Old AppData state is
+    # removed by the installer, never adopted or migrated.
+    return Join-Path $Root ('agents\' + $Sid)
 }
 function Get-FiloBundle {
     param([string]$Directory)
@@ -70,10 +71,10 @@ function Get-FiloBundle {
         if ($item.PSIsContainer -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $file.sha256) { throw "Bundle checksum mismatch: $($file.path)" }
     }
     foreach ($required in @('tools\filo.exe','scripts\system-service.ps1',
-        'scripts\windows\Desktop-Identity.ps1',
+        'scripts\windows\Desktop-Identity.ps1','scripts\windows\Claude-Identity.ps1','scripts\windows\Claude-Components.ps1',
         'scripts\resolve-desktop-runtime.ps1','scripts\windows\Desktop-Runtime.ps1',
         'scripts\windows\Host-Lifecycle.ps1',
-        'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Transaction.ps1',
+        'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Layout.ps1','scripts\windows\Install-Transaction.ps1',
         'scripts\windows\Uninstall-Transaction.ps1','scripts\windows\Service-State.ps1',
         'scripts\windows\Run-Standalone.ps1','scripts\windows\Worker-Update.ps1','tools\nssm.exe','tools\FiloBackground.exe',
         'scripts\windows\Source-Selection.ps1','internal\claude\mod\.claude-plugin\plugin.json',
@@ -166,30 +167,22 @@ function Grant-FiloDirectoryRead {
 }
 function Install-FiloRuntime {
     param([string]$Bundle, $Manifest, [string]$Root, [string]$Sid)
-    $target = Assert-FiloPrivatePath (Join-Path $Root ('releases\' + $Manifest.revision)) $Root
-    Grant-FiloDirectoryRead $Root $Sid
-    Grant-FiloDirectoryRead (Split-Path -Parent $target) $Sid
-    if (Test-Path -LiteralPath $target) {
-        $existing = Get-FiloBundle $target
-        if (($existing | ConvertTo-Json -Depth 8 -Compress) -ne ($Manifest | ConvertTo-Json -Depth 8 -Compress)) { throw 'Immutable release already exists with different contents' }
-        return $target
-    }
-    $stage = Assert-FiloPrivatePath ($target + '.staging-' + [guid]::NewGuid().ToString('N')) $Root
-    Protect-FiloDirectory $stage $Sid -ReadOnlyUser
-    try {
-        foreach ($file in $Manifest.files) {
-            $destination = Join-Path $stage $file.path
-            New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-            Copy-Item -LiteralPath (Join-Path $Bundle $file.path) -Destination $destination
-        }
-        Copy-Item -LiteralPath (Join-Path $Bundle 'manifest.json') -Destination $stage
-        Get-FiloBundle $stage | Out-Null
-        Move-Item -LiteralPath $stage -Destination $target
-    } finally {
-        if (Test-Path -LiteralPath $stage) {
-            $safe = Assert-FiloPrivatePath $stage $Root
-            Remove-Item -LiteralPath $safe -Recurse -Force
+    $target = Get-FiloProgramRoot
+    $safe = Assert-FiloPrivatePath $target (Split-Path -Parent $target)
+    # Restart sources and all owned processes have stopped before this point.
+    if (Test-Path -LiteralPath $safe) { Remove-Item -LiteralPath $safe -Recurse -Force }
+    New-Item -ItemType Directory -Path $safe -Force | Out-Null
+    foreach ($file in $Manifest.files) {
+        $relative = if ($file.path.StartsWith('tools\',[StringComparison]::OrdinalIgnoreCase)) {
+            'bin\' + $file.path.Substring(6)
+        } else { $file.path }
+        $destination = Assert-FiloPrivatePath (Join-Path $target $relative) $target
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $Bundle $file.path) -Destination $destination
+        if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ine $file.sha256) {
+            throw "Installed file checksum mismatch: $relative"
         }
     }
+    Copy-Item -LiteralPath (Join-Path $Bundle 'manifest.json') -Destination $target
     return $target
 }

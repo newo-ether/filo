@@ -5,18 +5,28 @@ authenticated encryption channel. One server owns the payload cache, event hub,
 image-reader admission and upload budget for every configured source. Additional
 sources never create additional public servers or budgets.
 
+Installed executables use `C:\Program Files\Filo\bin`, registered once in machine
+PATH. Service configuration, tokens and logs use `C:\ProgramData\Filo\service`;
+selected-account state and its fixed native runtime copy use
+`C:\ProgramData\Filo\agents\<SID>`. Installation removes earlier layouts without
+migration and verifies both worker and encrypted public readiness. Uninstall
+removes those directories and the owned service, tasks, firewall and PATH entry.
+See [the installer contract](windows-installer.md) for shutdown and failure behavior.
+
 ## Selected sources and identity
 
 Both service and private worker configuration use `sources`, an ordered array of
-one to three unique IDs: `codex-desktop`, `codex-cli`, `claude-code`. An absent field
-preserves Desktop-only behavior. An explicit empty, duplicate or unknown source is
-rejected. `desktopSid` is the selected ordinary Windows account for all sources;
+one to four unique IDs: `codex-desktop`, `codex-cli`, `claude-code` and
+`claude-desktop`. An absent field preserves Desktop-only behavior. An explicit
+empty, duplicate or unknown source is rejected. `desktopSid` is the selected
+ordinary Windows account for all sources;
 the existing key name is retained for compatibility. A CLI/Claude worker verifies
 its current process SID before any native source connection and refuses SYSTEM or
 a different account. Public LocalSystem code never opens those native sources.
 
-Only a selected Desktop source creates TaskSessions, a task executor directory,
-an upload store, Desktop IPC client or auxiliary app-server connection. Without
+Desktop selection creates its task executor directory, IPC client and auxiliary
+app-server connection. CLI and Claude Code have independent owned executors;
+selecting Desktop, CLI or Claude Code enables the shared raw upload store. Without
 Desktop the gateway still serves authenticated source descriptors, scoped history
 and safe shutdown. It does not pretend to provide a legacy Codex surface; old
 clients must use a compatible source-aware version.
@@ -46,37 +56,60 @@ binding must still match at final dispatch. Unscoped legacy Desktop behavior is
 preserved while scoped control requires that proof. Missing helpers or ambiguous
 ownership do not authorize replay, writer takeover or an alternate executor.
 
-## Codex CLI observation
+## Codex CLI
 
 CLI uses only the selected user's native history owner and fresh account/store
-scope. Optional `codexDaemonSocket` must be an explicit bounded absolute local
-socket path. No daemon is started and no app-server is substituted. Optional native
-metadata requires kernel peer identity and verified actual catalog/auth identity;
-a matching reported path is insufficient. Until that proof is available, models
-and usage capabilities remain false. Send, Stop, settings, creation, rename,
-archive and uploads are not advertised by this read-only source.
+scope. Filo-created CLI tasks have their own native writer and support idle Send,
+steering, Stop, supported settings, rename, archive and raw attachments. Original
+or unknown tasks remain read-only. Source model and usage reads open disposable
+native stdio app-servers without any thread or turn operation, verify the native
+store/account and fence the result against scope changes. Closing these reads
+releases only their own task-free child and never an accepted native task.
 
-## Claude Code Mod observation
+Optional `codexDaemonSocket` identifies an existing local socket. Filo does not
+start or substitute that shared daemon. Its metadata requires kernel peer identity
+and verified actual catalog/auth identity; a matching reported path is insufficient.
+Readable history, an executable or a disposable metadata read does not establish
+online status. Online status requires a verified live owned executor or existing
+daemon connection.
 
-`claudeBridgePort` defaults to 7438 and must differ from private worker port 7437
-and any configured worker port. Its listener binds only `127.0.0.1`, with bounded
+## Claude terminal and Desktop Code Mod observation
+
+`claudeBridgePort` defaults to 7438 and must differ from the public, private worker
+and selected native ports. Its listener binds only `127.0.0.1`, with bounded
 header/body/write/idle timeouts. Only `/claude-mod/v1/` is handled by the official
-Mod bridge. This listener is not mounted on the public service.
+Mod bridge. This listener is not mounted on the public service. Both selected
+Claude adapters share that listener but retain independent scopes, registrations,
+status and observed history. Claude Desktop covers local Code, not Chat or Cowork.
 
-The explicit Mod environment is one `FILO_CLAUDE_CONFIG` JSON value:
+Selecting either Claude source automatically installs the owned observer plugin
+under the selected profile's `.claude\skills\filo-observer`. The native plugin
+loader discovers it in the next normal session. Terminal Claude Code needs
+2.1.287+; Desktop needs its own embedded Code engine 2.1.286+, with Mods enabled
+by native policy. Installing files does not establish compatibility or online
+status, and the installer never restarts native clients.
+
+The Mod reads `filo-config.json` relative to its native plugin root, without an
+environment variable or a manual load step:
 
 ```json
-{"url":"http://127.0.0.1:7438/claude-mod/v1/","tokenFile":"C:\\FiloWorker\\claude-mod-token"}
+{"url":"http://127.0.0.1:7438/claude-mod/v1/","tokenFile":"C:\\FiloWorker\\claude-mod-token","sources":["claude-code","claude-desktop"]}
 ```
 
 `tokenFile` is absolute and refers to a distinct 256-bit secret inside the existing
 private worker directory. An absent file is generated exclusively; an invalid or
 reused worker token is refused instead of overwritten. The public service token
-never authenticates the bridge. Claude has an installation-local isolated scope,
-no claimed Codex account continuity and no execution authority. Observation is
-bounded from registration, with native IDs/turns preserved. Filo does not rewrite
-Claude startup, authentication, history or transcripts. Stopping the helper closes
-only Filo's bridge/client transport and does not cancel native generation.
+never authenticates the bridge. Claude has installation-local isolated scopes,
+no claimed Codex account continuity and no execution authority. Only a selected
+singleton terminal or desktop attachment can register; a changed, ambiguous or
+unselected roster revokes the old binding. Rebinding acquires a fresh nonce and
+discards old queued observations. Observation is bounded from registration, with
+native IDs/turns preserved. Installed descriptors remain visible offline until
+that source has an unexpired native registration. Filo preserves native settings,
+authentication, history and transcripts. Component ownership receipts constrain
+updates/removal to managed bytes and permit transactional rollback. Stopping the
+helper closes only Filo's bridge/client transport and does not cancel native
+generation.
 
 ## Lifecycle and verification
 

@@ -105,9 +105,9 @@ foreach ($relative in @('README.md','LICENSE','THIRD_PARTY_NOTICES.txt','thirdpa
     'scripts\install.ps1','scripts\system-service.ps1',
     'scripts\resolve-desktop-runtime.ps1','scripts\windows\Desktop-Runtime.ps1',
     'scripts\windows\Host-Lifecycle.ps1',
-    'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Transaction.ps1',
+    'scripts\windows\Installer-Tasks.ps1','scripts\windows\Install-Layout.ps1','scripts\windows\Install-Transaction.ps1',
     'scripts\windows\Uninstall-Transaction.ps1','scripts\windows\Service-State.ps1',
-    'scripts\windows\Desktop-Identity.ps1','scripts\windows\Client-Selection.ps1','scripts\windows\Source-Selection.ps1','scripts\windows\Install-Support.ps1','scripts\windows\Worker-Update.ps1','scripts\windows\Run-Standalone.ps1',
+    'scripts\windows\Desktop-Identity.ps1','scripts\windows\Claude-Identity.ps1','scripts\windows\Claude-Components.ps1','scripts\windows\Client-Selection.ps1','scripts\windows\Source-Selection.ps1','scripts\windows\Install-Support.ps1','scripts\windows\Worker-Update.ps1','scripts\windows\Run-Standalone.ps1',
     'internal\claude\mod\.claude-plugin\plugin.json','internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
     Copy-Payload (Join-Path $repo $relative) $relative
 }
@@ -118,7 +118,7 @@ foreach ($name in @('CGO_ENABLED','GOOS','GOARCH')) { $buildEnvironment[$name] =
 $env:CGO_ENABLED='0'; $env:GOOS='windows'; $env:GOARCH='amd64'
 Push-Location $repo
 try {
-    $buildFlags = "-H=windowsgui -X github.com/newo-ether/filo/internal/service.buildRevision=$revision -X github.com/newo-ether/filo/internal/service.buildModified=$modified"
+    $buildFlags = "-X github.com/newo-ether/filo/internal/service.buildRevision=$revision -X github.com/newo-ether/filo/internal/service.buildModified=$modified"
     & $go build -trimpath -buildvcs=false -ldflags $buildFlags -o $binary ./cmd/filo
     if ($LASTEXITCODE -ne 0) { throw 'Go build failed' }
 } finally {

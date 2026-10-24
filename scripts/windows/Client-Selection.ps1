@@ -1,6 +1,34 @@
 # Read-only discovery and selection of native sources under one Windows account.
 Set-StrictMode -Version 2
 . (Join-Path $PSScriptRoot 'Desktop-Identity.ps1')
+. (Join-Path $PSScriptRoot 'Claude-Identity.ps1')
+function Get-FiloClaudeCodeVersion {
+    # Read-only: never execute the native client to learn its version.
+    param([string]$Path)
+    try {
+        if ($Path -like '*.cmd') {
+            $package = Join-Path (Split-Path -Parent $Path) 'node_modules\@anthropic-ai\claude-code\package.json'
+            $text = [string](Get-Content -LiteralPath $package -Raw -ErrorAction Stop | ConvertFrom-Json).version
+        } else { $text = [string](Get-Item -LiteralPath $Path -ErrorAction Stop).VersionInfo.ProductVersion }
+        if ($text -match '^(\d+\.\d+\.\d+)') { return [version]$Matches[1] }
+    } catch { }
+    return $null
+}
+function Get-FiloClaudeCodeCompatibility {
+    param([string[]]$Paths)
+    $minimum = [version]'2.1.287'
+    $versions = @($Paths | ForEach-Object { Get-FiloClaudeCodeVersion $_ } | Where-Object { $_ } | Sort-Object -Descending)
+    if (-not $versions.Count) {
+        return [pscustomobject]@{ Version=$null; State='version-unknown'
+            Label="version unknown; observer needs $minimum+" }
+    }
+    $version = $versions[0]
+    if ($version -lt $minimum) {
+        return [pscustomobject]@{ Version=[string]$version; State='needs-upgrade'
+            Label="version $version is below $minimum; installs but stays offline until Claude Code is upgraded" }
+    }
+    [pscustomobject]@{ Version=[string]$version; State='compatible'; Label="version $version, compatible" }
+}
 function Get-FiloClients {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $elevated = ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -13,8 +41,12 @@ function Get-FiloClients {
         try { $applications = @(Get-FiloDesktopApplications -UserSid $profile.SID) } catch { }
         $account = try { ([Security.Principal.SecurityIdentifier]::new($profile.SID)).Translate([Security.Principal.NTAccount]).Value } catch { $profile.SID }
         $cliRoot = Join-Path $profile.LocalPath 'AppData\Local\OpenAI\Codex\bin'
-        $cli = @(Get-ChildItem -LiteralPath $cliRoot -Directory -ErrorAction SilentlyContinue |
-            ForEach-Object { Join-Path $_.FullName 'codex.exe' } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+        $cli = @(@(Get-ChildItem -LiteralPath $cliRoot -Directory -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName 'codex.exe' }) + @(
+                (Join-Path $profile.LocalPath '.codex\packages\standalone\current\bin\codex.exe'),
+                (Join-Path $profile.LocalPath '.local\bin\codex.exe'),
+                (Join-Path $profile.LocalPath 'AppData\Roaming\npm\codex.cmd')) |
+            Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
         if ($applications.Count) {
             [pscustomobject]@{
                 Id='codex-desktop:' + $profile.SID; Source='codex-desktop'; Name="Codex Desktop ($account)"; Supported=$true
@@ -22,7 +54,7 @@ function Get-FiloClients {
                 Profile=$profile.LocalPath; Sid=$profile.SID; Account=$account; Desktop=$applications[0].Executable; CliCandidates=$cli
             }
         }
-        if ($cli.Count -or (Test-Path -LiteralPath (Join-Path $profile.LocalPath '.codex') -PathType Container)) {
+        if ($cli.Count) {
             [pscustomobject]@{
                 Id='codex-cli:' + $profile.SID; Source='codex-cli'; Name="Codex CLI ($account)"; Supported=$true
                 RuntimeState='discovered'; Detail='Read-only native history; optional existing daemon metadata, no daemon startup'
@@ -31,11 +63,23 @@ function Get-FiloClients {
         }
         $claude = @(@('.local\bin\claude.exe','AppData\Roaming\npm\claude.cmd') |
             ForEach-Object { Join-Path $profile.LocalPath $_ } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
-        if ($claude.Count -or (Test-Path -LiteralPath (Join-Path $profile.LocalPath '.claude') -PathType Container)) {
+        if ($claude.Count) {
+            $compatibility = Get-FiloClaudeCodeCompatibility $claude
+            $suffix = if ($compatibility.State -eq 'compatible') { '' } elseif ($compatibility.State -eq 'needs-upgrade') { ' [needs upgrade]' } else { ' [version unknown]' }
             [pscustomobject]@{
-                Id='claude-code:' + $profile.SID; Source='claude-code'; Name="Claude Code ($account)"; Supported=$true
-                RuntimeState='discovered'; Detail='Read-only live observation; requires explicitly loaded Filo Mod, no send or stop'
+                Id='claude-code:' + $profile.SID; Source='claude-code'; Name="Claude Code ($account)$suffix"; Supported=$true
+                Version=$compatibility.Version; Compatibility=$compatibility.State
+                RuntimeState='discovered'; Detail="Automatic observer, read-only; $($compatibility.Label); Mods must be enabled"
                 Profile=$profile.LocalPath; Sid=$profile.SID; Account=$account; Desktop=$null; CliCandidates=@()
+            }
+        }
+        $claudeDesktop = @(Get-FiloClaudeDesktopApplications -UserSid $profile.SID -Profile $profile.LocalPath)
+        if ($claudeDesktop.Count) {
+            [pscustomobject]@{
+                Id='claude-desktop:' + $profile.SID; Source='claude-desktop'; Name="Claude Desktop ($account) [version unverified]"; Supported=$true
+                Version=$null; Compatibility='version-unknown'
+                RuntimeState='desktop-installed'; Detail='Local Code only; embedded engine version cannot be read before launch, observer needs 2.1.286+ with Mods enabled'
+                Profile=$profile.LocalPath; Sid=$profile.SID; Account=$account; Desktop=$claudeDesktop[0].Executable; CliCandidates=@()
             }
         }
     }
@@ -51,6 +95,8 @@ function Get-FiloClientSource {
 function Resolve-FiloSelection {
     param([object[]]$Clients, [string[]]$Ids)
     $selected = @()
+    # powershell.exe -File passes "-Clients a,b" as one string; accept both forms.
+    $Ids = @($Ids | ForEach-Object { "$_".Split(',') } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     foreach ($requested in $Ids) {
         $id = if ($requested -eq 'codex') { 'codex-desktop' }
             elseif ($requested.StartsWith('codex:')) { 'codex-desktop:' + $requested.Substring(6) } else { $requested }
@@ -71,7 +117,7 @@ function Resolve-FiloSelection {
     return $selected
 }
 function Select-FiloClients {
-    param([object[]]$Clients)
+    param([object[]]$Clients, [string[]]$InitialIds = @())
     if (-not $Clients.Count) { throw 'No supported native sources found. Install or open the intended native client, then discover again.' }
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
         throw 'Interactive selection needs a terminal. Use -ListClients, then -Clients <id> for unattended installation.'
@@ -82,6 +128,9 @@ function Select-FiloClients {
     $origin = $Host.UI.RawUI.CursorPosition
     $cursor = 0
     $checked = @{}
+    foreach ($item in $Clients) {
+        if ($item.Supported -and $InitialIds -contains $item.Id) { $checked[$item.Id] = $true }
+    }
     for ($i = 0; $i -lt $Clients.Count; $i++) { Write-Host ''; Write-Host '' }
     try {
         while ($true) {
@@ -91,7 +140,8 @@ function Select-FiloClients {
                 $item = $Clients[$i]
                 $box = if (-not $item.Supported) { '[-]' } elseif ($checked.ContainsKey($item.Id)) { '[x]' } else { '[ ]' }
                 $lead = if ($i -eq $cursor) { '>' } else { ' ' }
-                $color = if (-not $item.Supported) { 'DarkGray' } elseif ($i -eq $cursor) { 'Cyan' } else { 'White' }
+                $warn = $item.PSObject.Properties['Compatibility'] -and $item.Compatibility -ne 'compatible'
+                $color = if (-not $item.Supported) { 'DarkGray' } elseif ($i -eq $cursor) { 'Cyan' } elseif ($warn) { 'Yellow' } else { 'White' }
                 foreach ($line in @(" $lead $box $($item.Name)", "       $($item.Detail)")) {
                     if ($line.Length -gt $width) { $line = $line.Substring(0, $width - 3) + '...' }
                     Write-Host $line.PadRight($width) -ForegroundColor $color

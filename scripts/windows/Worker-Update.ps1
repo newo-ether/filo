@@ -13,7 +13,7 @@ function Get-FiloGatewayExpectation {
         }
     }
     return [pscustomobject]@{
-        Executable = [IO.Path]::GetFullPath((Join-Path $runtime 'tools\filo.exe'))
+        Executable = [IO.Path]::GetFullPath((Join-Path $runtime 'bin\filo.exe'))
         Marker = 'standalone'
     }
 }
@@ -57,14 +57,27 @@ function Get-FiloWorkerUpdatePlan {
                 (Get-Process -Id $gatewayId -ErrorAction SilentlyContinue)) { throw 'A user gateway lease is still active or invalid' }
         }
     }
-    if ($running) {
+    $serving = $running -and (Test-FiloWorkerServing $StateDirectory $config.port)
+    if ($serving) {
         $headers = @{Authorization='Bearer ' + [IO.File]::ReadAllText($tokenPath).Trim()}
         $info = Invoke-RestMethod -Uri ($url + '/v1/info') -Headers $headers -TimeoutSec 5 -DisableKeepAlive
         if (-not $info.PSObject.Properties['supportsSafeShutdown'] -or -not $info.supportsSafeShutdown) {
             throw 'This older Filo worker cannot verify safe shutdown. Complete its one-time idle migration before upgrading; no native process was stopped.'
         }
     }
-    return [pscustomobject]@{StateDirectory=$StateDirectory;Launch=$launch;Action=$task.Actions[0];WasRunning=$running;Url=$url;Changed=$false}
+    return [pscustomobject]@{StateDirectory=$StateDirectory;Launch=$launch;Action=$task.Actions[0];WasRunning=$running;Serving=$serving;Url=$url;Changed=$false}
+}
+# A running task with no listener and no live gateway lease is only its supervisor waiting to
+# retry (for example after the native host went away). It cannot admit turns, so the installer
+# may stop it directly instead of failing on /v1/info.
+function Test-FiloWorkerServing {
+    param([string]$StateDirectory, [int]$Port)
+    if (@(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count) { return $true }
+    $lease = Join-Path $StateDirectory 'gateway.pid'
+    $gatewayId = 0
+    if ((Test-Path -LiteralPath $lease) -and [int]::TryParse([IO.File]::ReadAllText($lease).Trim(), [ref]$gatewayId) -and
+        (Get-Process -Id $gatewayId -ErrorAction SilentlyContinue)) { return $true }
+    return $false
 }
 function Wait-FiloWorkerStopped {
     param($Plan)
@@ -82,6 +95,20 @@ function Wait-FiloWorkerStopped {
 }
 function Request-FiloWorkerStop {
     param($Plan)
+    if ($Plan.PSObject.Properties['Serving'] -and -not $Plan.Serving) {
+        # The stop marker blocks further supervisor attempts before the idle state is re-checked.
+        $request = Join-Path $Plan.StateDirectory 'gateway.stop'
+        [IO.File]::WriteAllText($request, 'Requested by Filo installer')
+        try {
+            if (-not (Test-FiloWorkerServing $Plan.StateDirectory ([uri]$Plan.Url).Port)) {
+                Stop-ScheduledTask -TaskName 'Filo-User-Agent'
+                Wait-FiloWorkerStopped $Plan
+                return
+            }
+        } finally { Remove-Item -LiteralPath $request -Force -ErrorAction SilentlyContinue }
+        # A gateway started in between; use the normal confirmed shutdown below.
+        $Plan.Serving = $true
+    }
     $headers = @{Authorization='Bearer ' + [IO.File]::ReadAllText((Join-Path $Plan.StateDirectory 'token')).Trim()}
     try {
         $result = Invoke-RestMethod -Uri ($Plan.Url + '/v1/shutdown') -Method Post -Headers $headers -TimeoutSec 40 -DisableKeepAlive

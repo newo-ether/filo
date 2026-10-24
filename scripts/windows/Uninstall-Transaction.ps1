@@ -1,64 +1,34 @@
-. (Join-Path $PSScriptRoot 'Service-State.ps1')
+. (Join-Path $PSScriptRoot 'Install-Layout.ps1')
+. (Join-Path $PSScriptRoot 'Claude-Components.ps1')
 
 function Invoke-FiloUninstall {
     param([string]$Bundle,[string]$Root,[string]$State,[string]$Worker,[string]$Sid)
-    $wrapper=Join-Path $Root 'nssm.exe'
-    $serviceScript=Join-Path $Bundle 'scripts\system-service.ps1'
-    $service=Get-CimInstance Win32_Service -Filter "Name='Filo'"
-    if ($service -and ($service.StartName -ne 'LocalSystem' -or $service.PathName.Trim('"') -ine $wrapper)) {
-        throw 'Existing service identity is not the Filo SYSTEM gateway; it was preserved'
+    $program=Get-FiloProgramRoot
+    $profiles=@(Get-CimInstance Win32_UserProfile | Where-Object { -not $_.Special -and $_.LocalPath } | ForEach-Object LocalPath)
+    $componentPlan=$null
+    if ($Worker -and (Test-Path -LiteralPath (Join-Path $Worker 'claude-components.json'))) {
+        $receipt=Read-FiloClaudeComponentBytes (Join-Path $Worker 'claude-components.json') 8192
+        $record=[Text.Encoding]::UTF8.GetString($receipt) | ConvertFrom-Json
+        $componentPlan=New-FiloClaudeComponentPlan $Bundle $Worker ([string]$record.profile) $Sid @()
     }
-    $parameters=if ($service) { Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\Filo\Parameters' }
-    $serviceWasRunning=Test-FiloServiceShouldRun $service
-    $snapshots=@{}
-    foreach ($name in @('Filo-User-Agent','Filo-Standalone-Host')) {
-        $task=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-        if ($task) { $snapshots[$name]=Export-ScheduledTask -TaskName $name }
+    Stop-FiloInstalledResources $Root $program $profiles
+    if ($componentPlan) { Install-FiloClaudeComponents $componentPlan }
+    foreach ($profile in $profiles) {
+        $marker=Join-Path $profile '.claude\skills\filo-observer\.filo-owner.json'
+        if (-not (Test-Path -LiteralPath $marker)) { continue }
+        $record=Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
+        $ownedWorker=Get-FiloWorkerState $Root $profile ([string]$record.sid) ''
+        $orphan=New-FiloClaudeComponentPlan $Bundle $ownedWorker $profile ([string]$record.sid) @()
+        Install-FiloClaudeComponents $orphan
     }
-    $workerPlan=$null; $hostPlan=$null; $tasksChanged=$false; $serviceChanged=$false
-    try {
-        if ($service -and $service.State -ne 'Stopped') {
-            Stop-Service -Name Filo
-            (Get-Service -Name Filo).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
+    Remove-FiloFirewallRules
+    Update-FiloMachinePath $program -Remove
+    Remove-FiloLegacyDirectories $Root $profiles
+    foreach ($directory in @($program,$Root)) {
+        if (Test-Path -LiteralPath $directory) {
+            $safe=Assert-FiloPrivatePath $directory (Split-Path -Parent $directory)
+            Remove-Item -LiteralPath $safe -Recurse -Force
         }
-        $workerPlan=Get-FiloWorkerUpdatePlan $Worker ('0' * 40)
-        if ($workerPlan -and $workerPlan.WasRunning) { Request-FiloWorkerStop $workerPlan }
-        $hostPlan=Get-FiloHostPlan $Worker (Join-Path $Bundle 'tools\filo.exe') $Sid
-        Stop-FiloHost $hostPlan
-        $tasksChanged=$true
-        foreach ($name in $snapshots.Keys) { Unregister-ScheduledTask -TaskName $name -Confirm:$false }
-        # Delete the service last: no fallible task mutation follows successful deletion.
-        $serviceChanged=$true
-        & $serviceScript -Action Uninstall -StateDirectory $State -WrapperPath $wrapper
-        Write-Output 'Filo removed. Original Codex and retained user data are unchanged.'
-    } catch {
-        $failure=$_
-        $rollbackErrors=[Collections.Generic.List[string]]::new()
-        if ($tasksChanged) {
-            foreach ($name in $snapshots.Keys) {
-                try { Register-ScheduledTask -TaskName $name -Xml $snapshots[$name] -Force | Out-Null }
-                catch { $rollbackErrors.Add("Restore ${name}: $($_.Exception.Message)") }
-            }
-        }
-        foreach ($entry in @(@{Name='Filo-Standalone-Host';Plan=$hostPlan},@{Name='Filo-User-Agent';Plan=$workerPlan})) {
-            if ($entry.Plan -and $entry.Plan.WasRunning) {
-                try { Start-ScheduledTask -TaskName $entry.Name }
-                catch { $rollbackErrors.Add("Restart $($entry.Name): $($_.Exception.Message)") }
-            }
-        }
-        try {
-            if ($serviceChanged -and $service -and -not (Get-Service -Name Filo -ErrorAction SilentlyContinue)) {
-                # The removed registration may predate this release, so recreate the
-                # service and reapply the recorded values instead of rebuilding them.
-                $restore=@{Action='Restore';StateDirectory=$State;WrapperPath=$wrapper;
-                    RestoreApplication=$parameters.Application;
-                    RestoreAppDirectory=$parameters.AppDirectory;
-                    RestoreAppParameters=$parameters.AppParameters}
-                if ($serviceWasRunning) { $restore.RestoreStart=$true }
-                & $serviceScript @restore
-            } elseif ($serviceWasRunning) { Start-Service -Name Filo }
-        } catch { $rollbackErrors.Add("Restore service: $($_.Exception.Message)") }
-        if ($rollbackErrors.Count) { throw "$($failure.Exception.Message). Rollback needs attention: $($rollbackErrors -join '; ')" }
-        throw $failure
     }
+    Write-Output 'Filo uninstalled: service, tasks, firewall, PATH, program and private data removed.'
 }

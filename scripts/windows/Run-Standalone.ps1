@@ -27,7 +27,7 @@ for ($attempt = 0; $attempt -lt 20; $attempt++) {
                 [int]$Matches[1] -lt 1024 -or [int]$Matches[1] -gt 65535) { throw 'Native helper endpoint must be loopback with a valid port' }
             $arguments = @('app-server','--listen',$endpoint)
         } else {
-            $executable = Join-Path $config.runtimeDirectory 'tools\filo.exe'
+            $executable = Join-Path $config.runtimeDirectory 'bin\filo.exe'
             $arguments = @('standalone', ('"' + $StateDirectory + '"'))
         }
     } catch {

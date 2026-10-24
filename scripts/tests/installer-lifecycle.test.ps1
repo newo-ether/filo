@@ -4,7 +4,7 @@ NSSM, and a service binary produced by scripts/build-windows.ps1 or by
 `go build ./cmd/filo`. It registers only a newly allocated qualification service,
 never the live Filo service. It supports an administrator or SYSTEM controller.
 
-The staged-binary self check refuses a runtime whose tools\filo.exe cannot answer
+The staged-binary self check refuses a runtime whose bin\filo.exe cannot answer
 `Usage: filo <...>`, so a refused runtime is rejected before any registration is
 written. A readiness failure with a valid binary (a bound port, a missing privilege)
 is covered by the transaction fixtures with a stub installer instead, because
@@ -27,7 +27,7 @@ $fixture = Assert-FiloPrivatePath (Join-Path $root ('qualification-' + $suffix))
 $state = Join-Path $fixture 'state'
 $good = Join-Path $fixture 'good'
 $bad = Join-Path $fixture 'bad'
-$entry = Join-Path $good 'tools\filo.exe'
+$entry = Join-Path $good 'bin\filo.exe'
 $before = Get-CimInstance Win32_Service -Filter "Name='Filo'" | Select-Object Name,ProcessId,StartName,State,PathName
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback,0)
 $listener.Start(); $port = $listener.LocalEndpoint.Port; $listener.Stop()
@@ -39,12 +39,12 @@ try {
         workerUrl='http://127.0.0.1:7437'; workerTokenPath=(Join-Path $state 'helper-token')
     }
     foreach ($runtime in @($good,$bad)) {
-        New-Item -ItemType Directory -Path (Join-Path $runtime 'tools') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $runtime 'bin') -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $runtime 'scripts\windows') -Force | Out-Null
         [IO.File]::WriteAllText((Join-Path $runtime 'scripts\windows\Desktop-Identity.ps1'), '# qualification placeholder - never used')
     }
     Copy-Item -LiteralPath $FiloPath -Destination $entry
-    [IO.File]::WriteAllText((Join-Path $bad 'tools\filo.exe'), 'not a Filo entrypoint')
+    [IO.File]::WriteAllText((Join-Path $bad 'bin\filo.exe'), 'not a Filo entrypoint')
     $common = @{StateDirectory=$state;WrapperPath=$WrapperPath;ServiceName=$name}
     $failed = $false
     try { & $installer @common -Action Install -RuntimeDirectory $bad } catch { $failed = $true }
@@ -70,8 +70,8 @@ try {
     Write-Output 'PASS: a refused update left the ready gateway on its previous registration'
     # Exercise rollback after registration, not only pre-validation refusal.
     $failsAfterRegistration=Join-Path $fixture 'fails-after-registration'
-    New-Item -ItemType Directory -Path (Join-Path $failsAfterRegistration 'tools') -Force | Out-Null
-    $failingBinary=Join-Path $failsAfterRegistration 'tools\filo.exe'
+    New-Item -ItemType Directory -Path (Join-Path $failsAfterRegistration 'bin') -Force | Out-Null
+    $failingBinary=Join-Path $failsAfterRegistration 'bin\filo.exe'
     $repo=Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
     Push-Location $repo
     try {

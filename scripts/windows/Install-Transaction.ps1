@@ -1,238 +1,119 @@
-. (Join-Path $PSScriptRoot 'Service-State.ps1')
-. (Join-Path $PSScriptRoot 'Worker-Update.ps1')
+. (Join-Path $PSScriptRoot 'Install-Layout.ps1')
 . (Join-Path $PSScriptRoot 'Source-Selection.ps1')
-
-function Stop-FiloNewTasks {
-    param([string]$Runtime,[string]$State,[string]$UserSid)
-    $launch=Get-Content -LiteralPath (Join-Path $State 'launch.json') -Raw | ConvertFrom-Json
-    if ([IO.Path]::GetFullPath([string]$launch.runtimeDirectory) -ine [IO.Path]::GetFullPath($Runtime) -or
-        [string]$launch.desktopSid -ne $UserSid) { throw 'Candidate helper identity changed before rollback' }
-    $task=Get-ScheduledTask -TaskName 'Filo-User-Agent' -ErrorAction SilentlyContinue
-    if ($task) {
-        # This also identifies a detached gateway whose scheduler entry is Ready.
-        # Shutdown fences new mutations and preserves accepted private executors.
-        $workerPlan=Get-FiloWorkerUpdatePlan $State ''
-        $gateway=$null
-        $lease=Join-Path $State 'gateway.pid'
-        if (Test-Path -LiteralPath $lease) {
-            $gatewayId=0
-            if (-not [int]::TryParse([IO.File]::ReadAllText($lease).Trim(),[ref]$gatewayId) -or $gatewayId -le 0) {
-                throw 'Invalid candidate gateway identity'
-            }
-            $gateway=Get-CimInstance Win32_Process -Filter "ProcessId=$gatewayId"
-            if ($gateway) {
-                $expectation=Get-FiloGatewayExpectation $launch
-                if ([IO.Path]::GetFullPath([string]$gateway.ExecutablePath) -ine $expectation.Executable -or
-                    ([string]$gateway.CommandLine).IndexOf($expectation.Marker,[StringComparison]::OrdinalIgnoreCase) -lt 0 -or
-                    ([string]$gateway.CommandLine).IndexOf([IO.Path]::GetFullPath($State),[StringComparison]::OrdinalIgnoreCase) -lt 0) {
-                    throw 'Candidate gateway process identity changed before rollback'
-                }
-            }
-        }
-        if ($workerPlan.WasRunning) { Request-FiloWorkerStop $workerPlan }
-        else { Wait-FiloWorkerStopped $workerPlan }
-        if ($gateway) { Wait-FiloCandidateExit $gateway }
-    } else {
-        $config=Get-Content -LiteralPath (Join-Path $State 'config.json') -Raw | ConvertFrom-Json
-        if ($config.bind -ne '127.0.0.1' -or $config.port -lt 1024 -or $config.port -gt 65535) {
-            throw 'Unrecognized candidate gateway endpoint'
-        }
-        $listeners=@(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort $config.port -State Listen -ErrorAction SilentlyContinue)
-        if ($listeners.Count -or (Test-Path -LiteralPath (Join-Path $State 'gateway.pid'))) {
-            throw 'Candidate gateway has no verifiable task registration; configuration was preserved'
-        }
-    }
-    # Only the separately identified, verified-idle metadata host may be retired.
-    # Never infer permission to kill native children from a command-line match.
-    $hostPlan=Get-FiloHostPlan $State (Join-Path $Runtime 'tools\filo.exe') $UserSid
-    Stop-FiloHost $hostPlan
-}
-
-function Wait-FiloCandidateExit {
-    param($Process)
-    $deadline=[DateTime]::UtcNow.AddSeconds(50)
-    do {
-        $current=Get-CimInstance Win32_Process -Filter "ProcessId=$($Process.ProcessId)"
-        # A reused PID proves the candidate exited. It grants no authority over
-        # the replacement process, which must never receive a signal.
-        if (-not $current -or $current.CreationDate -ne $Process.CreationDate -or
-            $current.ExecutablePath -ine $Process.ExecutablePath) { return }
-        Start-Sleep -Milliseconds 200
-    } while ([DateTime]::UtcNow -lt $deadline)
-    throw 'Candidate gateway process did not exit; configuration was preserved'
-}
+. (Join-Path $PSScriptRoot 'Claude-Components.ps1')
 
 function Invoke-FiloInstall {
     param([string]$Bundle,$Manifest,[string]$Root,[string]$State,[string]$Worker,$Client,[string]$Bind,[int]$Port,$SourceOptions)
     if (-not $SourceOptions) {
-        $sourceIds = if ($Client.PSObject.Properties['Sources']) { @($Client.Sources) } else { @('codex-desktop') }
-        $SourceOptions = Get-FiloSourceOptions $Worker $sourceIds '' $false 7438 $false $Port
+        $sourceIds=if ($Client.PSObject.Properties['Sources']) { @($Client.Sources) } else { @('codex-desktop') }
+        $SourceOptions=Get-FiloSourceOptions $Worker $sourceIds '' $false 7438 $false $Port
     }
-    $hasDesktop = $SourceOptions.Sources -contains 'codex-desktop'
-    $publicMode = if ($hasDesktop) { 'existing' } else { 'multi-source' }
-    $mode = if ($hasDesktop) { 'standalone' } else { 'multi-source' }
-    Write-Host '1/4  Verify Filo and preserve the current installation' -ForegroundColor Cyan
-    $configPath=Join-Path $State 'config.json'
-    $endpoints=Get-FiloHelperEndpoints $Worker
-    $nativeUrl = if ($hasDesktop) {
-        if ($endpoints.NativeUrl) { $endpoints.NativeUrl } else { 'ws://127.0.0.1:7436' }
-    } else { '' }
-    if ($hasDesktop -and ([uri]$nativeUrl).Port -eq $endpoints.WorkerPort) { throw 'Native and worker ports must differ' }
-    $previousMode = 'standalone'
-    $previousConfigPath = Join-Path $Worker 'config.json'
-    if (Test-Path -LiteralPath $previousConfigPath) {
-        $priorConfig = Get-Content -LiteralPath $previousConfigPath -Raw | ConvertFrom-Json
-        if (@(Get-FiloConfiguredSources $priorConfig) -notcontains 'codex-desktop') { $previousMode = 'multi-source' }
+    $hasDesktop=$SourceOptions.Sources -contains 'codex-desktop'
+    $hasClaude=@($SourceOptions.Sources | Where-Object { $_ -in @('claude-code','claude-desktop') }).Count -gt 0
+    $publicMode=if ($hasDesktop) { 'existing' } else { 'multi-source' }
+    $mode=if ($hasDesktop) { 'standalone' } else { 'multi-source' }
+    $program=Get-FiloProgramRoot
+    $savedPath=Join-Path $State 'config.json'
+    $saved=if (Test-Path -LiteralPath $savedPath) { Get-Content -LiteralPath $savedPath -Raw | ConvertFrom-Json } else { $null }
+    $fresh=-not ($saved -and $saved.PSObject.Properties['layoutVersion'] -and $saved.layoutVersion -eq 1)
+    if ((Test-FiloPathInside $Bundle $program) -or (Test-FiloPathInside $Bundle $Root) -or
+        [IO.Path]::GetFullPath($Bundle).TrimEnd('\') -ieq $program.TrimEnd('\')) {
+        throw 'Run installation from an extracted bundle outside the installed program and data directories'
     }
-    $wrapper=Join-Path $Root 'nssm.exe'
-    $service=Get-CimInstance Win32_Service -Filter "Name='Filo'"
-    if ($service -and ($service.StartName -ne 'LocalSystem' -or $service.PathName.Trim('"') -ine $wrapper)) {
-        throw 'Existing service identity is not the Filo SYSTEM gateway; it was preserved'
+    # Complete integrity, component ownership and endpoint preflight before stopping.
+    $endpoints=Get-FiloHelperEndpoints $Worker -IgnoreExisting:$fresh
+    $nativeUrl=if ($hasDesktop) { $endpoints.NativeUrl } else { '' }
+    if ($hasDesktop -and -not $nativeUrl) { $nativeUrl='ws://127.0.0.1:7436' }
+    $componentPlan=New-FiloClaudeComponentPlan $Bundle $Worker $Client.Profile $Client.Sid $SourceOptions.Sources
+    $profiles=@(Get-CimInstance Win32_UserProfile | Where-Object { -not $_.Special -and $_.LocalPath } | ForEach-Object LocalPath)
+    $profiles=@($profiles + @($Client.Profile) | Select-Object -Unique)
+    Write-Host '1/4  Stop Filo services, tasks and detached supervisors' -ForegroundColor Cyan
+    Stop-FiloInstalledResources $Root $program $profiles
+    Remove-FiloFirewallRules
+    if ($fresh) {
+        # Remove managed native helper bytes before discarding their old receipts.
+        foreach ($base in @($Root) + @(Get-FiloLegacyDirectories $Root $profiles)) {
+            if (-not (Test-Path -LiteralPath $base)) { continue }
+            foreach ($receipt in @(Get-ChildItem -LiteralPath $base -Filter 'claude-components.json' -File -Recurse -Force)) {
+                $record=Get-Content -LiteralPath $receipt.FullName -Raw | ConvertFrom-Json
+                Remove-FiloClaudeComponents $receipt.DirectoryName ([string]$record.sid)
+            }
+        }
+        if (Test-Path -LiteralPath $Root) {
+            $safe=Assert-FiloPrivatePath $Root (Split-Path -Parent $Root)
+            Remove-Item -LiteralPath $safe -Recurse -Force
+        }
+        $componentPlan=New-FiloClaudeComponentPlan $Bundle $Worker $Client.Profile $Client.Sid $SourceOptions.Sources
     }
-    $previousParameters=if ($service) { Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\Filo\Parameters' }
-    $serviceWasRunning=Test-FiloServiceShouldRun $service
-    $snapshots=@{}
-    foreach ($file in @($configPath,(Join-Path $Worker 'config.json'),(Join-Path $Worker 'launch.json'),(Join-Path $Worker 'claude-mod.json'))) {
-        $snapshots[$file]=if (Test-Path -LiteralPath $file) { [IO.File]::ReadAllBytes($file) } else { $null }
-    }
-    $taskSnapshots=@{}
-    foreach ($name in @('Filo-Standalone-Host','Filo-User-Agent')) {
-        $task=Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-        $taskSnapshots[$name]=if ($task) { Export-ScheduledTask -TaskName $name } else { $null }
-    }
-    $workerPlan=$null; $hostPlan=$null; $tasksChanged=$false; $serviceChanged=$false; $runtime=$null
-    $workerStopAttempted=$false; $hostStopAttempted=$false; $serviceStopAttempted=$false; $configurationChanged=$false
+    Remove-FiloLegacyDirectories $Root $profiles
     try {
+        Write-Host '2/4  Replace the fixed program directory and prepare private data' -ForegroundColor Cyan
         $runtime=Install-FiloRuntime $Bundle $Manifest $Root $Client.Sid
-        $filo=Join-Path $runtime 'tools\filo.exe'
-        # Reject an unrecognized or active installation before interrupting it.
-        if (Test-Path -LiteralPath (Join-Path $Worker 'launch.json')) {
-            $workerPlan=Get-FiloWorkerUpdatePlan $Worker ('0' * 40)
-            $hostPlan=Get-FiloHostPlan $Worker $filo $Client.Sid
-        } elseif (@($taskSnapshots.Values | Where-Object { $_ }).Count) { throw 'Unrecognized Filo tasks; existing installation preserved' }
-        if ($workerPlan -and $workerPlan.WasRunning) {
-            $workerStopAttempted=$true
-            Request-FiloWorkerStop $workerPlan
-        }
-        if ($hostPlan) {
-            # The gateway fence can race with a final admission; verify idle again.
-            $hostPlan=Get-FiloHostPlan $Worker $filo $Client.Sid
-            $hostStopAttempted=$true
-            Stop-FiloHost $hostPlan
-        }
-        if ($service -and $service.State -ne 'Stopped') {
-            $serviceStopAttempted=$true
-            Stop-Service -Name Filo
-            (Get-Service -Name Filo).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
-        }
-        Write-Host '2/4  Prepare Filo private state and ordinary-user helpers' -ForegroundColor Cyan
+        $filo=Join-Path $runtime 'bin\filo.exe'
+        $wrapper=Join-Path $runtime 'bin\nssm.exe'
+        Grant-FiloDirectoryRead $Root $Client.Sid
+        Grant-FiloDirectoryRead (Join-Path $Root 'agents') $Client.Sid
         Protect-FiloDirectory $State
         Protect-FiloDirectory $Worker $Client.Sid
         New-FiloToken (Join-Path $State 'token')
         New-FiloToken (Join-Path $Worker 'token')
-        if (-not (Test-Path -LiteralPath $wrapper)) { Copy-Item -LiteralPath (Join-Path $runtime 'tools\nssm.exe') -Destination $wrapper }
-        $workspace=if ($workerPlan) { $workerPlan.Launch.workspaceDirectory } else { $Client.Profile }
-        if ($SourceOptions.Sources -contains 'claude-code') { New-FiloToken (Join-Path $Worker 'claude-mod-token') }
-        $launch=@{runtimeDirectory=$runtime;revision=$Manifest.revision;
-            desktopSid=$Client.Sid;workspaceDirectory=$workspace;sources=@($SourceOptions.Sources)}
+        if ($hasClaude) { New-FiloToken (Join-Path $Worker 'claude-mod-token') }
+        $launch=@{layoutVersion=1;runtimeDirectory=$runtime;revision=$Manifest.revision;
+            desktopSid=$Client.Sid;workspaceDirectory=$Client.Profile;sources=@($SourceOptions.Sources)}
         $workerConfig=@{bind='127.0.0.1';port=$endpoints.WorkerPort;desktopSid=$Client.Sid;sources=@($SourceOptions.Sources)}
-        $gatewayConfig=@{bind=$Bind;port=$Port;desktopSid=$Client.Sid;sources=@($SourceOptions.Sources);
+        $gatewayConfig=@{layoutVersion=1;bind=$Bind;port=$Port;desktopSid=$Client.Sid;sources=@($SourceOptions.Sources);
             workerUrl=$endpoints.WorkerUrl;workerTokenPath=(Join-Path $Worker 'token')}
         if ($hasDesktop) { $launch.appServerUrl=$nativeUrl; $workerConfig.appServerUrl=$nativeUrl }
         foreach ($record in @($launch,$workerConfig,$gatewayConfig)) {
             if ($SourceOptions.CodexDaemonSocket) { $record.codexDaemonSocket=$SourceOptions.CodexDaemonSocket }
-            if ($SourceOptions.Sources -contains 'claude-code') { $record.claudeBridgePort=$SourceOptions.ClaudeBridgePort }
+            if ($hasClaude) { $record.claudeBridgePort=$SourceOptions.ClaudeBridgePort }
         }
-        $configurationChanged=$true
-        if ($SourceOptions.Sources -contains 'claude-code') {
+        if ($hasClaude) {
             Write-FiloJson (Join-Path $Worker 'claude-mod.json') @{
                 url=('http://127.0.0.1:' + $SourceOptions.ClaudeBridgePort + '/claude-mod/v1/')
                 tokenFile=(Join-Path $Worker 'claude-mod-token')
             }
         }
+        Install-FiloClaudeComponents $componentPlan
+        if (-not $hasClaude -and (Test-Path -LiteralPath (Join-Path $Worker 'claude-mod.json'))) {
+            Remove-Item -LiteralPath (Join-Path $Worker 'claude-mod.json') -Force
+        }
         Write-FiloJson (Join-Path $Worker 'launch.json') $launch
         Write-FiloJson (Join-Path $Worker 'config.json') $workerConfig
-        Write-FiloJson $configPath $gatewayConfig
-        $tasksChanged=$true
+        Write-FiloJson (Join-Path $State 'config.json') $gatewayConfig
+        foreach ($name in @('gateway.stop','gateway.pid')) {
+            $path=Join-Path $Worker $name
+            if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+        }
+        Update-FiloMachinePath $program
+        Write-Host '3/4  Register and start ordinary-user tasks and the SYSTEM gateway' -ForegroundColor Cyan
+        $taskOptions=New-FiloTaskOptions $Client.Sid
         if ($hasDesktop) {
-            Register-FiloUserTask 'Filo-Standalone-Host' (New-FiloTaskAction $runtime $Worker Host $workspace) $Client.Sid
-        } elseif ($hostPlan) {
-            Unregister-ScheduledTask -TaskName 'Filo-Standalone-Host' -Confirm:$false
+            $hostAction=New-FiloTaskAction $runtime $Worker Host $Client.Profile
+            Register-FiloUserTask 'Filo-Standalone-Host' $hostAction $Client.Sid $taskOptions
         }
-        Register-FiloUserTask 'Filo-User-Agent' (New-FiloTaskAction $runtime $Worker Gateway $workspace) $Client.Sid
-        $profile=Get-CimInstance Win32_UserProfile | Where-Object SID -eq $Client.Sid
-        if ($profile.Loaded) {
-            if ($hasDesktop) { Start-ScheduledTask -TaskName 'Filo-Standalone-Host' }
-            Start-ScheduledTask -TaskName 'Filo-User-Agent'
-            Wait-FiloEndpoint $endpoints.WorkerUrl (Join-Path $Worker 'token') $mode -Seconds 45
-        }
-        Write-Host '3/4  Install the independent SYSTEM gateway' -ForegroundColor Cyan
-        $serviceChanged=$true
+        $gatewayAction=New-FiloTaskAction $runtime $Worker Gateway $Client.Profile
+        Register-FiloUserTask 'Filo-User-Agent' $gatewayAction $Client.Sid $taskOptions
+        if ($hasDesktop) { Start-ScheduledTask -TaskName 'Filo-Standalone-Host' }
+        Start-ScheduledTask -TaskName 'Filo-User-Agent'
+        Wait-FiloEndpoint $endpoints.WorkerUrl (Join-Path $Worker 'token') $mode -Seconds 45
         & (Join-Path $runtime 'scripts\system-service.ps1') -Action Install -RuntimeDirectory $runtime -StateDirectory $State -FiloPath $filo -WrapperPath $wrapper
-        Write-Host '4/4  Verify authenticated service readiness' -ForegroundColor Cyan
-        Wait-FiloEndpoint ("http://" + $Bind + ':' + $Port) (Join-Path $State 'token') $publicMode -FiloPath $filo
+        if ($Bind -ne '127.0.0.1') {
+            New-NetFirewallRule -Name 'Filo-Remote' -DisplayName 'Filo Remote' -Group 'Filo' -Direction Inbound `
+                -Action Allow -Protocol TCP -LocalAddress $Bind -LocalPort $Port -RemoteAddress '100.64.0.0/10' `
+                -Program $filo -Profile Any | Out-Null
+        }
+        Write-Host '4/4  Verify authenticated readiness and fixed entrypoint' -ForegroundColor Cyan
+        Wait-FiloEndpoint ("http://${Bind}:$Port") (Join-Path $State 'token') $publicMode -FiloPath $filo
+        if (-not (Test-Path -LiteralPath $filo -PathType Leaf)) { throw 'Fixed Filo entrypoint is missing' }
         Write-Output "Filo installed for $($Client.Name): http://${Bind}:$Port"
-        Write-Output "Access token: $State\token. Configured sources: $($SourceOptions.Sources -join ', ')."
+        Write-Output "Command: $filo. Access token file: $State\token. Sources: $($SourceOptions.Sources -join ', ')."
     } catch {
         $failure=$_
-        $rollbackErrors=[Collections.Generic.List[string]]::new()
-        # Stop only newly admitted Filo resources. The original desktop has never been a child.
-        try { if ($tasksChanged) { Stop-FiloNewTasks $runtime $Worker $Client.Sid } }
-        catch { $rollbackErrors.Add("Stop candidate tasks: $($_.Exception.Message)") }
-        try {
-            if ($serviceChanged -and (Get-Service -Name Filo -ErrorAction SilentlyContinue)) {
-                Stop-Service -Name Filo
-                (Get-Service -Name Filo).WaitForStatus('Stopped',[TimeSpan]::FromSeconds(20))
-            }
-        }
-        catch { $rollbackErrors.Add("Stop candidate service: $($_.Exception.Message)") }
-        if ($rollbackErrors.Count) {
-            # A live candidate must keep its matching launch/configuration and task
-            # identity. Restoring the old files here would cross the idle fence.
-            throw "$($failure.Exception.Message). Rollback needs attention; candidate configuration was preserved: $($rollbackErrors -join '; ')"
-        }
-        foreach ($file in @($snapshots.Keys | Where-Object { $configurationChanged })) {
-            try {
-                if ($null -ne $snapshots[$file]) { [IO.File]::WriteAllBytes($file,$snapshots[$file]) }
-                elseif (Test-Path -LiteralPath $file) { Remove-Item -LiteralPath $file -Force }
-            } catch { $rollbackErrors.Add("Restore configuration: $($_.Exception.Message)") }
-        }
-        if ($tasksChanged) {
-            foreach ($name in $taskSnapshots.Keys) {
-                try {
-                    if ($taskSnapshots[$name]) { Register-ScheduledTask -TaskName $name -Xml $taskSnapshots[$name] -Force | Out-Null }
-                    elseif (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue) { Unregister-ScheduledTask -TaskName $name -Confirm:$false }
-                } catch { $rollbackErrors.Add("Restore ${name}: $($_.Exception.Message)") }
-            }
-        }
-        foreach ($entry in @(@{Name='Filo-Standalone-Host';Plan=$hostPlan;Attempted=$hostStopAttempted},@{Name='Filo-User-Agent';Plan=$workerPlan;Attempted=$workerStopAttempted})) {
-            if ($entry.Attempted -and $entry.Plan -and $entry.Plan.WasRunning) {
-                try {
-                    Start-ScheduledTask -TaskName $entry.Name
-                    if ($entry.Name -eq 'Filo-User-Agent') {
-                        Wait-FiloEndpoint $endpoints.WorkerUrl (Join-Path $Worker 'token') $previousMode -Seconds 45
-                    }
-                }
-                catch { $rollbackErrors.Add("Restart $($entry.Name): $($_.Exception.Message)") }
-            }
-        }
-        try {
-            if ($serviceChanged) {
-                if ($service) {
-                    # This release installs over a Node registration, so it cannot rebuild
-                    # the previous command line from its own rules. Restore what was recorded.
-                    $restore=@{Action='Restore';StateDirectory=$State;WrapperPath=$wrapper;
-                        RestoreApplication=$previousParameters.Application;
-                        RestoreAppDirectory=$previousParameters.AppDirectory;
-                        RestoreAppParameters=$previousParameters.AppParameters}
-                    if ($serviceWasRunning) { $restore.RestoreStart=$true }
-                    & (Join-Path $runtime 'scripts\system-service.ps1') @restore
-                } else {
-                    & (Join-Path $runtime 'scripts\system-service.ps1') -Action Uninstall -StateDirectory $State -WrapperPath $wrapper
-                }
-            } elseif ($serviceStopAttempted -and $serviceWasRunning) { Start-Service -Name Filo }
-        } catch { $rollbackErrors.Add("Restore service: $($_.Exception.Message)") }
-        if ($rollbackErrors.Count) { throw "$($failure.Exception.Message). Rollback needs attention: $($rollbackErrors -join '; ')" }
-        throw $failure
+        # An in-place replacement cannot roll back to a hash directory. Leave one
+        # stopped installation and a precise nonzero error, never mixed versions.
+        try { Stop-FiloInstalledResources $Root $program $profiles }
+        catch { throw "Filo installation failed: $($failure.Exception.Message). Cleanup also failed: $($_.Exception.Message)" }
+        throw "Filo installation failed: $($failure.Exception.Message). Filo resources are stopped; rerun the complete installer after correcting the reported cause."
     }
 }

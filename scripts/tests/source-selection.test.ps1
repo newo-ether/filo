@@ -15,13 +15,14 @@ try {
         Rejects { Get-FiloConfiguredSources ([pscustomobject]@{sources=$invalid}) }
     }
     Rejects { Get-FiloConfiguredSources ([pscustomobject]@{sources='codex-cli'}) }
-    foreach ($sources in @(@('codex-cli'),@('claude-code'),@('codex-cli','claude-code'),@('codex-desktop','codex-cli','claude-code'))) {
+    foreach ($sources in @(@('codex-cli'),@('claude-code'),@('claude-desktop'),@('codex-cli','claude-code'),@('codex-desktop','codex-cli','claude-code','claude-desktop'))) {
         $options=Get-FiloSourceOptions $fixture $sources '' $false 7438 $false 7435
         Assert (($options.Sources -join ',') -eq ($sources -join ',')) 'Selected sources have one bounded configuration'
         Assert ($options.ClaudeBridgePort -eq 7438) 'Bridge defaults to its separate loopback port'
     }
     foreach ($port in @(7435,7436,7437)) {
         Rejects { Get-FiloSourceOptions $fixture @('codex-desktop','claude-code') '' $false $port $true 7435 }
+        Rejects { Get-FiloSourceOptions $fixture @('codex-desktop','claude-desktop') '' $false $port $true 7435 }
     }
     Rejects { Get-FiloSourceOptions $fixture @('codex-cli') '' $false 7438 $false 7437 }
     Rejects { Get-FiloSourceOptions $fixture @('codex-desktop') '' $false 7438 $false 7436 }
@@ -46,28 +47,11 @@ try {
     Assert (-not $withoutCLI.CodexDaemonSocket) 'Explicit source removal drops irrelevant CLI endpoint'
     Write-FiloJson (Join-Path $fixture 'launch.json') @{sources=@('codex-cli');appServerUrl='ws://127.0.0.1:7436'}
     Rejects { Get-FiloHelperEndpoints $fixture }
-    $profile=Join-Path $fixture 'profile'
-    New-Item -ItemType Directory -Path $profile -Force | Out-Null
-    $owner=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $bundle=Join-Path $fixture 'bundle'
-    $mod=Join-Path $bundle 'internal\claude\mod'
-    foreach ($relative in @('.claude-plugin\plugin.json','hooks\hooks.json','hooks\register.js')) {
-        $file=Join-Path $mod $relative
-        New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
-        [IO.File]::WriteAllText($file,'fixture; never loaded')
-    }
-    $target=Join-Path $profile 'filo-observer'
-    Copy-FiloClaudeMod $bundle $target $profile $owner | Out-Null
-    Assert (Test-Path -LiteralPath (Join-Path $target 'hooks\register.js')) 'Opt-in copy includes the Mod module'
-    Assert (-not (Test-Path -LiteralPath (Join-Path $profile '.claude'))) 'Copy never creates native settings'
-    Rejects { Copy-FiloClaudeMod $bundle $target $profile $owner }
-    Rejects { Assert-FiloClaudeModDestination (Join-Path $profile '.claude\filo') $profile $owner }
-    Rejects { Assert-FiloClaudeModDestination (Join-Path $fixture 'outside-profile') $profile $owner }
     $build=Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\build-windows.ps1') -Raw
-    foreach ($relative in @('scripts\windows\Source-Selection.ps1','internal\claude\mod\.claude-plugin\plugin.json','internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
+    foreach ($relative in @('scripts\windows\Source-Selection.ps1','scripts\windows\Claude-Components.ps1','internal\claude\mod\.claude-plugin\plugin.json','internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
         Assert ($build.Contains($relative)) ('Bundle explicitly includes '+$relative)
     }
-    'PASS: bounded source configuration, legacy/default preservation, endpoint collisions, explicit Mod copy and bundle payload'
+    'PASS: bounded four-source configuration, legacy/default preservation, endpoint collisions and automatic component bundle payload'
 } finally {
     $safe=Assert-FiloPrivatePath $fixture ([IO.Path]::GetTempPath())
     if (Test-Path -LiteralPath $safe) { Remove-Item -LiteralPath $safe -Recurse -Force }
