@@ -93,6 +93,11 @@ func ReadConversationPage(ctx context.Context, source ConversationReader, id, cu
 	if err != nil {
 		return empty, err
 	}
+	// A source may provide a source-bound replay cursor for its initial page.
+	// Preserve it through display splitting and nested worker paging.
+	if page.PageCursor.Known {
+		nativeCursor = page.PageCursor.Value
+	}
 	if len(options.ExcludedTurns) > 0 {
 		excluded := make(map[string]bool, len(options.ExcludedTurns))
 		for _, turn := range options.ExcludedTurns {
@@ -193,7 +198,7 @@ func ReadConversationPage(ctx context.Context, source ConversationReader, id, cu
 		encoded := encodePageCursor(prefix, pageCursorPayload{ID: id, Native: nativePointer(nativeCursor), Before: &messages[0].ID})
 		result.NextCursor = &encoded
 	}
-	result.PageCursor = protocol.Optional[string]{}
+	result.PageCursor = page.PageCursor
 	if len(messages) > 0 {
 		encoded := encodePageCursor(prefix, pageCursorPayload{ID: id, Native: nativePointer(nativeCursor), Through: &messages[len(messages)-1].ID})
 		result.PageCursor = protocol.Known(encoded)

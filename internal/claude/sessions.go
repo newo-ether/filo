@@ -8,8 +8,8 @@ import (
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
-// HistoryBoundary is explicit: these rows are observed after Mod registration,
-// not a recovered native transcript. A registration starts with no stable history.
+// HistoryBoundary describes live observations. Persisted history uses its own
+// signed cursor and the exact lifecycle-reported native transcript path.
 const HistoryBoundary = "observed-since-registration"
 
 func (a *Adapter) List(ctx context.Context, cursor string) (protocol.SessionPage, error) {
@@ -82,22 +82,43 @@ func (a *Adapter) Read(ctx context.Context, id, cursor string, activity bool, ex
 	if err := ctx.Err(); err != nil {
 		return protocol.ConversationPage{}, err
 	}
-	if cursor != "" {
-		return protocol.ConversationPage{}, errors.New("Claude history before registration or outside the bounded observation window is unsupported")
-	}
 	if len(excludedTurns) != 0 {
 		return protocol.ConversationPage{}, errors.New("Claude observed rows have no proven native turn association")
 	}
 	a.refreshTitle(ctx, id)
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	r, err := a.findLocked(id)
 	if err != nil {
+		a.mu.Unlock()
 		return protocol.ConversationPage{}, err
+	}
+	snapshot := transcriptSnapshot{path: r.transcript, nonce: r.nonce, origin: r.origin, registered: r.registered}
+	a.mu.Unlock()
+	history := transcriptPage{includeLive: true}
+	// Native timestamps bound history to this registration. Live rows keep
+	// their native identity and never acquire a turn by event order.
+	if snapshot.path != "" {
+		history, err = a.readTranscript(ctx, id, cursor, activity, snapshot)
+		if err != nil {
+			if cursor != "" {
+				return protocol.ConversationPage{}, err
+			}
+			// Native lifecycle metadata can arrive before the transcript exists.
+			// Optional history must not hide established live observations.
+			history = transcriptPage{includeLive: true}
+		}
+	} else if cursor != "" {
+		return protocol.ConversationPage{}, errors.New("Claude native transcript history is unavailable")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	r, err = a.findLocked(id)
+	if err != nil || r.nonce != snapshot.nonce || r.transcript != snapshot.path {
+		return protocol.ConversationPage{}, errors.New("Claude native history binding changed")
 	}
 	access := a.accessLocked(r)
 	page := protocol.ConversationPage{Messages: []protocol.Message{}, Queued: []protocol.QueuedInput{},
-		Access: &access, Runtime: runtimeView(r)}
+		Access: &access, Runtime: runtimeView(r), NextCursor: history.NextCursor, PageCursor: history.PageCursor}
 	for i := range r.inputs {
 		input := &r.inputs[i]
 		if input.Receipt.State == "submitted" && a.now().After(input.Deadline) {
@@ -105,12 +126,25 @@ func (a *Adapter) Read(ctx context.Context, id, cursor string, activity bool, ex
 		}
 		page.InputReceipts = append(page.InputReceipts, input.Receipt)
 	}
+	if !history.includeLive {
+		page.Messages = history.Messages
+		return page, nil
+	}
+	// Persisted records are older than this registration. The live projection
+	// remains authoritative for the current native turn and runtime state.
+	liveIDs := make(map[string]bool)
+	for _, row := range r.rows {
+		liveIDs[row.UUID] = true
+	}
+	for _, message := range history.Messages {
+		if !liveIDs[message.NativeID] {
+			page.Messages = append(page.Messages, message)
+		}
+	}
 	for _, row := range r.rows {
 		if row.Activity != nil && !activity {
 			continue
 		}
-		// Append rows retain native UUIDs without inferred turns. Stream blocks
-		// carry their own explicit turn/step/block or tool-use identity.
 		page.Messages = append(page.Messages, observedMessage(row))
 	}
 	return page, nil

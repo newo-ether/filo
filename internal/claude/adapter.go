@@ -46,9 +46,9 @@ type BridgeStatus struct {
 }
 
 // Adapter is both the native SessionAPI and the authenticated loopback handler.
-// State is bounded in memory and discarded on helper restart. No transcript files
-// are read for conversation recovery or written. Bounded native metadata title
-// reads are separate from conversation projection. Separate registrations cannot assert account continuity.
+// State is bounded in memory and discarded on helper restart. Conversation
+// history reads only native records through a source-bound lifecycle transcript
+// path. Native transcripts are never written. Separate registrations cannot assert account continuity.
 type Adapter struct {
 	mu            sync.Mutex
 	token         string
@@ -69,6 +69,7 @@ type registration struct {
 	origin            string
 	version           string
 	expires           time.Time
+	registered        time.Time
 	updated           time.Time
 	sequence          uint64
 	lastDigest        [32]byte

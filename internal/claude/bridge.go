@@ -198,7 +198,7 @@ func (a *Adapter) register(w http.ResponseWriter, input registerRequest) {
 	// proof is available to coalesce identities across registrations.
 	a.registrations[input.SessionID] = &registration{nativeID: input.SessionID, nonce: nonce,
 		instance: input.Instance, canonical: a.canonical(input.SessionID, nonce), cwd: input.Cwd,
-		origin: input.Origin, version: input.Version, expires: a.now().Add(a.ttl), updated: a.now(), status: "unknown"}
+		origin: input.Origin, version: input.Version, expires: a.now().Add(a.ttl), registered: a.now(), updated: a.now(), status: "unknown"}
 	a.mu.Unlock()
 	a.changed(input.SessionID)
 	a.respond(w, http.StatusOK, bridgeResponse{Nonce: nonce, TTLMillis: a.ttl.Milliseconds(),
