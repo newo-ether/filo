@@ -168,13 +168,19 @@ func cliSharedLoaded(host *codex.CodexHost) ([]string, error) {
 	return ids, nil
 }
 
-func (f *cliSharedFactory) catalog(ctx context.Context) ([]protocol.Session, error) {
+func (f *cliSharedFactory) catalog(ctx context.Context) (rows []protocol.Session, catalogErr error) {
 	f.catalogMu.Lock()
 	defer f.catalogMu.Unlock()
-	// Failed or absent discovery must discard earlier admission evidence.
-	f.mu.Lock()
-	f.tasks = map[string]cliSharedRecord{}
-	f.mu.Unlock()
+	// Publish completed discovery atomically. An in-flight refresh must not
+	// route an admitted shared task through another access path. Failed or
+	// absent discovery still discards all earlier admission evidence.
+	defer func() {
+		if catalogErr != nil || len(rows) == 0 {
+			f.mu.Lock()
+			f.tasks = map[string]cliSharedRecord{}
+			f.mu.Unlock()
+		}
+	}()
 	if f.daemon != nil {
 		return f.daemonCatalog(ctx)
 	}

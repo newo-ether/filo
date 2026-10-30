@@ -31,6 +31,7 @@ type controlIPC struct {
 	state           map[string]any
 	dispatch        error
 	settingsApplied func()
+	settingsResult  map[string]any
 	connectErr      error
 }
 
@@ -49,9 +50,19 @@ func (ipc *controlIPC) Request(ctx context.Context, method string, version int, 
 	}
 	switch method {
 	case "thread-follower-update-thread-settings":
+		// Native discovery refuses a client whose settings protocol does not match.
+		if version != 2 {
+			return desktop.Message{"resultType": "error", "error": "no-client-found"}, nil
+		}
 		if ipc.settingsApplied != nil {
 			ipc.settingsApplied()
 		}
+		result := ipc.settingsResult
+		if result == nil {
+			result = map[string]any{"applied": true}
+		}
+		return desktop.Message{"resultType": "success", "handledByClientId": target,
+			"result": result}, nil
 	case "thread-follower-start-turn":
 		return desktop.Message{"resultType": "success", "handledByClientId": target,
 			"result": map[string]any{"result": map[string]any{"turn": map[string]any{"id": "new-turn"}}}}, nil
@@ -402,7 +413,7 @@ func TestSettingsValidateNativeCapabilitiesAndNeverAuthorizeFallback(t *testing.
 		}
 		operations := f.ipc.operations()
 		if len(operations) != 1 || operations[0].method != "thread-follower-update-thread-settings" ||
-			operations[0].version != 1 || operations[0].target != "original" {
+			operations[0].version != 2 || operations[0].target != "original" {
 			t.Fatal(operations)
 		}
 		settings, isSettings := operations[0].params["threadSettings"].(protocol.SessionSettings)

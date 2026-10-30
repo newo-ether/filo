@@ -130,12 +130,12 @@ func (sessions *DesktopSessions) UpdateSettings(ctx context.Context, id string, 
 	}
 	revision := entry.revision
 	sessions.f.mu.Unlock()
-	result, err := sessions.operation(ctx, id, owner, "thread-follower-update-thread-settings", 1,
+	result, err := sessions.operation(ctx, id, owner, "thread-follower-update-thread-settings", 2,
 		map[string]any{"threadSettings": settings})
 	if err != nil {
 		return err
 	}
-	if ok, isBool := fields(result)["ok"].(bool); !isBool || !ok {
+	if applied, isBool := fields(result)["applied"].(bool); !isBool || !applied {
 		return errors.New(nativeSettingsUnconfirmed)
 	}
 	return sessions.waitSettings(ctx, entry, revision, settings)

@@ -100,6 +100,48 @@ func TestDesktopSettingsRequireEveryRequestedField(t *testing.T) {
 	}
 }
 
+func TestDesktopSettingsRequireAppliedReceipt(t *testing.T) {
+	for _, mode := range []string{"applied", "rejected", "missing", "invalid", "legacyOK"} {
+		t.Run(mode, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				state := desktopState("thread", "completed", "idle")
+				state["latestModel"] = "old-model"
+				base := &baseFixture{models: []protocol.Model{{ID: "old-model"}, {ID: "new-model"}}}
+				f := newControlSessions(state, base, nil)
+				defer f.sessions.Close()
+				f.ipc.settingsResult = map[string]any{}
+				switch mode {
+				case "applied":
+					f.ipc.settingsResult["applied"] = true
+				case "rejected":
+					f.ipc.settingsResult["applied"] = false
+				case "invalid":
+					f.ipc.settingsResult["applied"] = "true"
+				case "legacyOK":
+					f.ipc.settingsResult["ok"] = true
+				}
+				f.ipc.settingsApplied = func() {
+					sendSettingsPatches(f.sessions, 2, map[string]any{
+						"op": "replace", "path": []any{"latestModel"}, "value": "new-model",
+					})
+				}
+				err := f.sessions.UpdateSettings(context.Background(), "thread",
+					protocol.SessionSettings{Model: protocol.Known("new-model")})
+				if (err == nil) != (mode == "applied") {
+					t.Fatalf("%s settings receipt: %v", mode, err)
+				}
+				if err != nil && err.Error() != nativeSettingsUnconfirmed {
+					t.Fatalf("Unexpected settings rejection: %v", err)
+				}
+				operations := f.ipc.operations()
+				if len(operations) != 1 || operations[0].version != 2 || operations[0].target != "original" {
+					t.Fatal("Settings must use the current protocol and exact owner once", operations)
+				}
+			})
+		})
+	}
+}
+
 func sendSettingsPatches(sessions *DesktopSessions, revision int64, patches ...any) {
 	message := snapshotOf("thread", "original", float64(revision), nil)
 	fields(message["params"])["change"] = map[string]any{
