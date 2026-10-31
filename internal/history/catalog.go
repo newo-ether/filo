@@ -8,14 +8,23 @@ import (
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
+// NativeReader reads paged history through an already verified, read-only native
+// connection. The selected home must match the connection's native store.
+type NativeReader func(context.Context, string, string, string, bool, []string) (protocol.ConversationPage, error)
+
 // NativeHistory resolves one selected original account per read. It cannot
-// acquire an owner, launch a native process or mutate a native database.
+// acquire an owner or mutate a native database.
 type NativeHistory struct {
-	home func(context.Context) (string, error)
+	home   func(context.Context) (string, error)
+	native NativeReader
 }
 
-func NewNativeHistory(home func(context.Context) (string, error)) *NativeHistory {
-	return &NativeHistory{home: home}
+func NewNativeHistory(home func(context.Context) (string, error), native ...NativeReader) *NativeHistory {
+	reader := &NativeHistory{home: home}
+	if len(native) > 0 {
+		reader.native = native[0]
+	}
+	return reader
 }
 
 func (history *NativeHistory) List(ctx context.Context, cursor string) (protocol.SessionPage, error) {

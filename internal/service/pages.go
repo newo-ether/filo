@@ -16,21 +16,16 @@ import (
 
 const (
 	// MaxResponseBytes bounds one encoded response body.
-	MaxResponseBytes = 1024 * 1024
+	MaxResponseBytes = 4 * 1024 * 1024
 	// MaxConversationPageBytes bounds one conversation page body, including the
 	// metadata reservation the pager keeps free for the enclosing envelope.
-	MaxConversationPageBytes = 256 * 1024
+	MaxConversationPageBytes = 3 * 1024 * 1024
 	maxMessages              = 128
-	toolPreviewCharacters    = 8192
 	partCharacters           = 16384
 	reservedMetadataBytes    = 16384
 	maxCursorUnits           = 8192
 	maxAnchorUnits           = 512
 )
-
-// previewTruncationNote is appended to a bounded tool preview; the full output
-// stays in Codex.
-const previewTruncationNote = "\n[Filo preview truncated; full output remains in Codex.]"
 
 // ConversationReader exposes paged native reads. excludedTurns is meaningful
 // only for readers that do not already exclude their own live turns.
@@ -443,11 +438,8 @@ func preview(value protocol.Optional[protocol.Text]) protocol.Optional[protocol.
 	if !value.Known {
 		return protocol.Optional[protocol.Text]{}
 	}
-	text := string(value.Value)
-	if toolpreview.UTF16Len(text) <= toolPreviewCharacters {
-		return value
-	}
-	return protocol.Known(protocol.Text(toolpreview.SliceUTF16(text, toolPreviewCharacters) + previewTruncationNote))
+	text, _ := toolpreview.ToolPreview(string(value.Value))
+	return protocol.Known(protocol.Text(text))
 }
 
 // slicesReverse restores native order after a backwards window walk.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
+	"os"
 	"strings"
 
 	"github.com/newo-ether/filo/internal/protocol"
@@ -32,6 +34,30 @@ func (history *NativeHistory) Read(ctx context.Context, id, cursor string, activ
 	}
 	if err != nil {
 		return result, err
+	}
+	if strings.HasPrefix(cursor, "filo.native.rpc.") {
+		if history.native == nil {
+			return result, errors.New("Native history reader is unavailable")
+		}
+		return history.native(ctx, home, id, cursor, activity, excludedTurns)
+	}
+	if cursor == "" || strings.HasSuffix(path, ".jsonl.zst") {
+		file, openErr := os.Open(path)
+		if file != nil {
+			file.Close()
+		}
+		if strings.HasSuffix(path, ".jsonl.zst") || errors.Is(openErr, fs.ErrNotExist) || errors.Is(openErr, fs.ErrPermission) {
+			if cursor != "" {
+				return result, errors.New("History source changed; reopen this session before paging")
+			}
+			if history.native == nil {
+				return result, errors.New("Native history reader is unavailable")
+			}
+			return history.native(ctx, home, id, cursor, activity, excludedTurns)
+		}
+		if openErr != nil {
+			return result, openErr
+		}
 	}
 	db, err := OpenDatabase(ctx, home, History)
 	if err != nil {

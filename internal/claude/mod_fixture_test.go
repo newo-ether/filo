@@ -19,7 +19,11 @@ func TestOfficialModArtifactFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := string(source) + modFixtureScript + runtimeModFixtureScript + controlModFixtureScript + effortModFixtureScript + mutationModFixtureScript + failOpenModFixtureScript + liveModFixtureScript
+	desktop, err := os.ReadFile("mod/hooks/desktop.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := strings.Replace(string(source), "import { desktopMetadata, desktopRename } from './desktop.mjs'", string(desktop), 1) + modFixtureScript + runtimeModFixtureScript + controlModFixtureScript + effortModFixtureScript + mutationModFixtureScript + failOpenModFixtureScript + liveModFixtureScript + toolBudgetModFixtureScript + resumeModFixtureScript + metadataModFixtureScript + desktopDiscoveryFixtureScript + desktopMetadataFixtureScript + desktopRenameFixtureScript
 	command := exec.Command(runner, "--input-type=module")
 	command.Stdin = strings.NewReader(script)
 	if output, err := command.CombinedOutput(); err != nil {

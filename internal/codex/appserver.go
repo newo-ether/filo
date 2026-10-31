@@ -44,6 +44,8 @@ type HostOptions struct {
 	Token *string
 	// Timeout bounds the whole connect sequence. Zero means no deadline.
 	Timeout time.Duration
+	// PacketLimit optionally bounds native replies before JSON decoding.
+	PacketLimit int
 }
 
 // CodexHost is one client connection to the shared native owner. Closing it
@@ -86,7 +88,10 @@ func ConnectCodexHost(ctx context.Context, rawURL string, options HostOptions) (
 	if err != nil {
 		return nil, codexConnectFailure(err)
 	}
-	host := newCodexSocketHost(socket)
+	if options.PacketLimit > 0 {
+		socket.limit = options.PacketLimit
+	}
+	host := newCodexSocketHostBounded(socket, options.PacketLimit)
 	params := map[string]any{
 		"clientInfo": map[string]any{
 			"name": "filo", "title": "Filo", "version": codexHostClientVersion,
@@ -112,9 +117,13 @@ func ConnectCodexHost(ctx context.Context, rawURL string, options HostOptions) (
 }
 
 func newCodexSocketHost(socket *WebSocket) *CodexHost {
+	return newCodexSocketHostBounded(socket, 0)
+}
+
+func newCodexSocketHostBounded(socket *WebSocket, limit int) *CodexHost {
 	host := &CodexHost{socket: socket}
 	host.inputReader, host.inputWriter = io.Pipe()
-	host.Rpc = NewRpc(host.inputReader, &hostWriter{socket: socket})
+	host.Rpc = NewBoundedRpc(host.inputReader, &hostWriter{socket: socket}, limit)
 	go host.pumpInput()
 	return host
 }

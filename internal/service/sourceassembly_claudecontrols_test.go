@@ -19,7 +19,7 @@ func TestClaudeExecutorCeilingIncludesOnlyConfiguredModSteering(t *testing.T) {
 			executor.options.ReadOnly = &claude.Adapter{}
 		}
 		caps := executor.Capabilities()
-		if (caps.ActiveSend == "native-steer") != withMod || !caps.Create || !caps.Rename {
+		if (caps.ActiveSend == "native-steer") != withMod || caps.Create || !caps.Rename {
 			t.Fatalf("withMod=%v capabilities=%+v", withMod, caps)
 		}
 		owned := &claude.NativeSession{}
@@ -79,7 +79,7 @@ func TestAssemblyClaudeControlsSurvivePublicCeilingAndKeepFreshRestrictions(t *t
 					t.Fatalf("phase=%d discovery status=%d", phase, status)
 				}
 				caps := info.Adapters[0].Capabilities
-				if (caps.ActiveSend == "native-steer") != (phase != 2) || caps.IdleSend != (phase != 2) || caps.Stop != (phase != 2) || !caps.Models || (len(caps.Settings) == 2) != (phase != 2) {
+				if (caps.ActiveSend == "native-steer") != (phase != 2) || caps.IdleSend != (phase != 2) || caps.Stop != (phase != 2) || caps.Models || (len(caps.Settings) == 1) != (phase != 2) {
 					t.Fatalf("phase=%d source controls=%+v", phase, caps)
 				}
 				if caps.Create || caps.Rename || caps.Archive || caps.Uploads || caps.Usage {
@@ -91,7 +91,7 @@ func TestAssemblyClaudeControlsSurvivePublicCeilingAndKeepFreshRestrictions(t *t
 					t.Fatalf("phase=%d session status=%d", phase, status)
 				}
 				caps = page.Access.Capabilities
-				if (caps.ActiveSend == "native-steer") != (phase == 0) || caps.IdleSend != (phase == 0) || caps.Stop != (phase == 0) || (len(caps.Settings) == 2) != (phase == 0) {
+				if (caps.ActiveSend == "native-steer") != (phase == 0) || caps.IdleSend != (phase == 0) || caps.Stop != (phase == 0) || (len(caps.Settings) == 1) != (phase == 0) {
 					t.Fatalf("phase=%d session controls=%+v", phase, caps)
 				}
 			}

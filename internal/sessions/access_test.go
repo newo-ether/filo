@@ -75,7 +75,8 @@ func TestCatalogAccessIsCanonicalAndNeverLoadsNativeOwners(t *testing.T) {
 		defer f.sessions.Close()
 		for _, id := range []string{"thread", "other-thread"} {
 			access, err := f.sessions.CatalogAccess(context.Background(), id)
-			if err != nil || access.NativeScopeID != "verified_store" || hasControl(access.Capabilities) {
+			if err != nil || access.NativeScopeID != "verified_store" || access.Capabilities.IdleSend ||
+				access.Capabilities.Stop || access.Capabilities.Uploads || !access.Capabilities.Rename || !access.Capabilities.Archive {
 				t.Fatal(access, err)
 			}
 			encoded, _ := json.Marshal([3]string{"codex", "verified_store", id})
@@ -134,7 +135,7 @@ func TestAccessCapabilitiesFollowNativeRuntimeAndDispatchSupport(t *testing.T) {
 					t.Fatal(err)
 				}
 				caps := access.Capabilities
-				if !caps.History || !caps.Live || !caps.Models || caps.Create || caps.Rename || caps.Archive {
+				if !caps.History || !caps.Live || !caps.Models || caps.Create || !caps.Rename || !caps.Archive {
 					t.Fatal(caps)
 				}
 				if caps.IdleSend != (mode == "idle") || caps.Stop != (mode == "active") ||

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -85,6 +86,31 @@ func TestReadTaskEventsFailsOnTheErrorMarker(t *testing.T) {
 	}
 	if delivered != 0 {
 		t.Fatalf("an error record still delivered %d payloads", delivered)
+	}
+}
+
+// TestReadTaskEventsForwardsLargeToolPages verifies the private SSE hop uses
+// the same response admission bound as the public page transport.
+func TestReadTaskEventsForwardsLargeToolPages(t *testing.T) {
+	output := strings.Repeat("x", 1536*1024)
+	body, err := json.Marshal(map[string]any{"messages": []any{map[string]any{
+		"id": "tool", "activity": map[string]any{"result": output},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered := false
+	err = ReadTaskEvents(taskEventResponse(200, "text/event-stream", "data: "+string(body)+"\n\n"), func(value any) error {
+		page := value.(map[string]any)
+		message := page["messages"].([]any)[0].(map[string]any)
+		if message["activity"].(map[string]any)["result"] != output {
+			t.Fatal("Forwarded tool content changed")
+		}
+		delivered = true
+		return nil
+	})
+	if !delivered || err == nil || err.Error() != "Filo task stream disconnected" {
+		t.Fatal("Large page was rejected before delivery", err)
 	}
 }
 

@@ -34,9 +34,9 @@ const (
 	entryHeaderTimeout = 5 * time.Second
 )
 
-// entryBindPattern limits gateway listeners to loopback or the RFC 6598 range
-// used by tailnet addresses. isEntryIPv4 validates each octet before admission.
-var entryBindPattern = regexp.MustCompile(`^(127\.0\.0\.1|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3})$`)
+// entryBindPattern admits all-interface IPv4, loopback and the RFC 6598 range.
+// Private workers independently require loopback in their entry-point validation.
+var entryBindPattern = regexp.MustCompile(`^(0\.0\.0\.0|127\.0\.0\.1|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3})$`)
 
 // isEntryIPv4 requires four decimal octets without leading zeroes. Abbreviated
 // addresses such as `127.1` and padded octets such as `100.064.1.1` are refused

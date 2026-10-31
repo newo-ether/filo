@@ -28,7 +28,11 @@ func (s *NativeSession) putNativeRow(row protocol.Message) bool {
 		s.rowBytes -= nativeRowBytes(s.rows[position])
 	}
 	size := nativeRowBytes(row)
-	if size > maxRowBytes {
+	rowLimit := maxRowBytes
+	if row.Activity != nil && row.Activity.Type == "tool" {
+		rowLimit = 2 << 20
+	}
+	if size > rowLimit {
 		if position >= 0 {
 			s.rows = append(s.rows[:position], s.rows[position+1:]...)
 		}

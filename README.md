@@ -12,8 +12,12 @@ not patch Codex, change its normal startup configuration, or automate the deskto
 
 The Windows installer discovers **Codex Desktop**, **Codex CLI**, **Claude Code**
 and **Claude Desktop**, lets you select clients under one Windows account, and
-installs their required Filo components automatically. Codex Desktop provides the
-task controls listed below and needs no separate Codex CLI installation.
+installs their required Filo components automatically. New conversations are
+unavailable for both Codex CLI and Claude Code: their worker and gateway advertise
+`create:false` and reject creation before native allocation. Existing native and
+previously Filo-created sessions retain their admitted controls.
+Codex Desktop provides the task controls listed below and needs no separate
+Codex CLI installation.
 Filo-owned Codex CLI tasks support bounded native history, idle Send,
 native steering, exact-turn Stop and supported model, effort and tier settings.
 Normally launched Codex CLI terminals use the account's existing official shared
@@ -25,9 +29,11 @@ includes partial assistant text, thinking, tool-use arguments and matched tool
 results; activity rows require an activity-enabled read. Filo-owned Codex CLI tasks
 also support rename, archive and raw attachments. Other original or unknown CLI
 sessions need independently verified native ownership. Claude Mod sessions expose
-bounded text, current model, native model options, request effort and exact-turn
-Stop. Send/Insert uses explicitly non-exact submitted/observed confirmation; an
-unconfirmed input blocks resend and never replays. Session-local model/effort choices
+bounded text, current model, request effort and exact-turn Stop. Mod configuration
+aliases are not exposed as selectable models; request effort remains available
+independently of a model catalog. Send/Insert uses explicitly non-exact
+submitted/observed confirmation; an unconfirmed input blocks resend and never
+replays. Session-local effort choices
 remain pending until a subsequent native engine request proves actual values.
 Claude Desktop covers **Code** only, with no Chat or Cowork support. Its embedded
 engine qualified registration, non-exact idle Send, running Insert with native
@@ -35,11 +41,19 @@ user-note consumption, exact-turn Stop and subsequent native-request effort
 confirmation. Its live projection qualified streamed text, native tool arguments,
 results and states, active-user lifecycle evidence, and native title consistency.
 Accepted generation and native tool calls also continued through gateway and
-private-worker outages. The Mod's engine configuration choices are aliases, while
+private-worker outages. Desktop Rename now shares the qualified permission-preserving
+native self-read/title-change/readback sequence; public session access requires a
+current registration and exact persisted host/engine mapping. Titles update only
+after exact applied native readback. The new public Go route has focused worker
+and encrypted-gateway tests; installing its new candidate is a separate gate.
+The Mod's engine configuration choices are aliases, while
 Desktop builds its Code menu from a separate bootstrap model catalog. Passing raw
 configuration aliases to the request returned provider errors. The inspected public
-Mod API exposes neither that catalog nor a read-only alias resolver; Desktop model
-selection remains unqualified.
+Mod API exposes neither that catalog nor a read-only alias resolver. Original Mod
+sessions advertise no model directory or model mutation; Desktop model selection
+remains unavailable through Filo. Claude Code's separate owned executor reads its
+own runtime's task-free initialize catalog, preserving native choice IDs, display
+names and effort metadata. It does not use Mod aliases or supply Desktop's catalog.
 Claude Code's separate owned executor does not support active steering, archive or service-tier settings,
 and its owned executor denies native approval requests. Attachment-enabled native
 sessions receive access to the private upload directory under default permissions.
@@ -56,9 +70,16 @@ that result remains unconfirmed and is not replayed. The separately qualified
 shared websocket path delivered matching settings updates to both subscribers.
 This does not qualify every runtime or settings combination. No independent
 read-only current-settings query is assumed.
-Mod observation starts at native registration and is not a complete transcript.
-WSL clients are outside this Windows integration. Mixed terminal/Desktop surface
-attachments are rejected for Claude source attribution.
+Live Mod observation starts at native registration. A source-bound lifecycle
+transcript path also provides bounded older text, thinking and tool pages with
+native message/tool identities. An existing Desktop registration that missed the
+lifecycle event can find its transcript through the exact persisted host/engine
+mapping and one unique engine-UUID file in the selected native projects store;
+this read-only discovery grants no control or runtime state. Tool results join qualified calls within the
+signed snapshot and bounded lookup; unmatched results remain unknown. Historical
+media and branch ancestry are not reconstructed, so this is not a complete
+transcript. WSL clients are outside this Windows integration. Mixed
+terminal/Desktop surface attachments are rejected for Claude source attribution.
 
 Private configuration selects one to four `sources`: `codex-desktop`, `codex-cli`,
 `claude-code` and `claude-desktop`. Omitting the field preserves Desktop-only
@@ -117,8 +138,8 @@ The following capabilities apply to **Codex Desktop**:
 | --- | --- |
 | Tasks and history | Search the native catalog; read the latest bounded page, then load older messages on demand. |
 | Live tasks | Follow the original owner through verified Desktop IPC; send, steer and stop using native turn identity. |
-| New tasks | Create on the first explicit Send, using the unmodified runtime supplied by Desktop when IPC cannot provide creation. |
-| Task management | Rename and archive through native APIs. Archive preserves the original records. |
+| New tasks | Create on the first explicit Send, using the unmodified runtime supplied by Desktop when IPC cannot provide creation. Immediate Desktop sidebar visibility remains unqualified. |
+| Task management | Rename and archive through native APIs using an account-bound catalog grant; execution ownership is not required. Archive preserves the original records. |
 | Model settings | Read supported models, thinking levels and service tiers; apply supported settings to subsequent turns. |
 | Images and files | Read authorized inline/tool images and upload photos or files to the target computer as unchanged bytes. |
 | Usage | Expose native usage information when the connected account provides it. |
@@ -183,10 +204,13 @@ Set-ExecutionPolicy Bypass -Scope Process -Force; irm https://raw.githubusercont
 The installer downloads and verifies the latest Windows release, discovers local
 clients, then shows a checkbox selector. Choose one or more supported native clients
 under the same Windows account; their required Filo components install automatically.
-Run the same command again to upgrade. Fixed-layout reinstalls preserve the access
-token. The executable is `C:\Program Files\Filo\bin\filo.exe`, added once to machine
+Run the same command again to upgrade. Reinstalls and earlier-layout migration
+preserve the public access token, including interrupted installs and retries.
+Invalid existing public tokens abort before interruption and remain unchanged.
+The executable is `C:\Program Files\Filo\bin\filo.exe`, added once to machine
 PATH; private data and logs live under `C:\ProgramData\Filo`. Earlier layouts are
-removed without migration. A failed run stops Filo resources and returns an error.
+removed without migrating other configuration or private credentials. A failed
+run stops Filo resources and returns an error.
 End users need their selected
 native clients and the Filo bundle, without Git, Go, Node.js or manual component
 downloads. A Desktop-only selection needs no separate CLI. See the
@@ -219,16 +243,21 @@ are separate prerequisites, not downloaded or executed by the installer.
 Extract the complete ZIP. Run `Install-Filo.ps1` from an administrator PowerShell
 terminal and select the discovered native clients under one Windows account. The
 installer configures their required components automatically. CLI-only or Claude-only
-selection does not register a Desktop auxiliary Host. Reinstalls keep the fixed-layout
-token and verify worker and public readiness before reporting success.
+selection does not register a Desktop auxiliary Host. Reinstalls keep the existing
+public token and verify worker and public readiness before reporting success.
 `-ListClients`, `-ValidateOnly` and `-Uninstall` support discovery, preflight and
 removal; see the [installer guide](docs/windows-installer.md).
 
-In Agora, open **Remote**, add a device name, and enter the Filo service URL and its
-access token. Use a reachable address accepted by the installer. The current
-listener supports loopback and an explicitly selected tailnet IPv4 address; generic
-LAN binding, Internet relays and browser clients are outside its supported scope.
-Retrieve the service token locally as an administrator and keep it private.
+In Agora, open **Remote**, add a device name, and enter a reachable Filo service
+URL and its access token. New installations listen on `0.0.0.0` (all IPv4 interfaces);
+fixed-layout upgrades preserve their prior bind unless `-Bind 0.0.0.0` is supplied.
+Loopback and explicit tailnet IPv4 binding remain available. The managed firewall
+rule still permits only tailnet peers; all-interface binding does not add a general
+LAN/Internet allow rule. Enter the device's reachable address, never `0.0.0.0`.
+After verified successful installation, the installer prints the access token
+directly, including SSH, non-interactive and redirected invocations. Keep the token
+private and redact it from any retained installer output. Internet relays and browser
+clients remain outside the supported scope.
 
 ## Encrypted transport
 

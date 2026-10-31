@@ -96,6 +96,9 @@ func (m *NativeMetadata) Rename(id, name string) (protocol.Session, error) {
 	if err := decodeMetadata(value, &response); err != nil {
 		return protocol.Session{}, err
 	}
+	if response.Thread.ID != id {
+		return protocol.Session{}, errors.New("Native rename target is unconfirmed")
+	}
 	return response.Thread.session(), nil
 }
 

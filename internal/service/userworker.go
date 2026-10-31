@@ -21,7 +21,7 @@ const (
 	// not an authenticated loopback endpoint.
 	userWorkerEndpointRefusal = "Filo user worker must be an authenticated loopback endpoint"
 	// userWorkerResponseLimit bounds one user-agent response body.
-	userWorkerResponseLimit = 1024 * 1024
+	userWorkerResponseLimit = MaxResponseBytes
 	// userWorkerUnavailable is the fallback message of a refused user-agent call.
 	userWorkerUnavailable = "User agent unavailable"
 )

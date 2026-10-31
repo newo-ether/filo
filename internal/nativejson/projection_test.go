@@ -73,40 +73,14 @@ func itemsOf(t *testing.T, state map[string]any) []any {
 	return arr(t, obj(t, turns[0])["items"])
 }
 
-// A 192 MiB native tool result must retain a bounded projection while preserving
-// short public text and metadata.
+// Extreme native records are rejected before retained state exceeds 64 MiB.
 func TestHugeToolResultStaysBounded(t *testing.T) {
-	if testing.Short() {
-		t.Skip("memory-heavy baseline case")
-	}
-	prefix := statePrefix + `{"id":"u","type":"userMessage","content":[{"type":"text","text":"Hello 🌍"}]},{"id":"tool","type":"mcpToolCall","result":{"content":[{"type":"text","text":"`
-	suffix := `"}]}},{"id":"view","type":"imageView","path":"C:/image.png"}]}]}`
-	size := int64(192 * 1024 * 1024)
-	input := io.MultiReader(strings.NewReader(prefix), &repeatReader{b: 'x', n: size}, strings.NewReader(suffix))
-	value, retained := mustRead(t, input, false)
-	if retained > 4*1024*1024 {
-		t.Fatalf("retained %d bytes for a 192 MiB payload", retained)
-	}
-	items := itemsOf(t, obj(t, value))
-	if got := obj(t, value)["latestModel"]; got != "native-model" {
-		t.Fatalf("latestModel = %v", got)
-	}
-	if got := Text(obj(t, arr(t, obj(t, items[0])["content"])[0])["text"]); got != "Hello 🌍" {
-		t.Fatalf("public text = %q", got)
-	}
-	if got := Text(obj(t, items[2])["path"]); got != "C:/image.png" {
-		t.Fatalf("image path = %q", got)
-	}
-	preview := Text(obj(t, arr(t, obj(t, obj(t, items[1])["result"])["content"])[0])["text"])
-	if !strings.HasPrefix(preview, strings.Repeat("x", PreviewUnits)) || !strings.HasSuffix(preview, PreviewSuffix) {
-		t.Fatalf("preview = %q", preview[:min(len(preview), 64)])
-	}
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if len(encoded) >= 10000 {
-		t.Fatalf("projection serialized to %d bytes", len(encoded))
+	prefix := statePrefix + `{"id":"tool","type":"mcpToolCall","result":{"content":[{"type":"text","text":"`
+	suffix := `"}]}}]}]}`
+	input := io.MultiReader(strings.NewReader(prefix), &repeatReader{b: 'x', n: 192 * 1024 * 1024}, strings.NewReader(suffix))
+	_, retained, err := Read(input, false)
+	if err == nil || !strings.Contains(err.Error(), "retained state limit") || retained > MaxRetainedBytes+8 {
+		t.Fatalf("extreme record: retained=%d error=%v", retained, err)
 	}
 }
 
@@ -137,7 +111,7 @@ func TestSharedPreviewBudgetAndDiscardedFields(t *testing.T) {
 	if last["index"] != float64(63) {
 		t.Fatalf("operations[63].index = %v", last["index"])
 	}
-	if code := Text(last["code"]); code != "" {
+	if code := Text(last["code"]); code != strings.Repeat("a", 10000) {
 		t.Fatalf("operations[63].code retained %d bytes after budget", len(code))
 	}
 	content := arr(t, obj(t, item["result"])["content"])
@@ -151,7 +125,7 @@ func TestSharedPreviewBudgetAndDiscardedFields(t *testing.T) {
 		t.Fatalf("content text = %q", visible)
 	}
 	firstCode := Text(obj(t, operations[0])["code"])
-	if !strings.HasSuffix(firstCode, PreviewSuffix) || len(firstCode) > PreviewUnits+len(PreviewSuffix) {
+	if firstCode != strings.Repeat("a", 10000) {
 		t.Fatalf("first code length %d", len(firstCode))
 	}
 }
@@ -169,7 +143,7 @@ func TestPatchValueInheritsImmerPath(t *testing.T) {
 		t.Fatalf("patch path = %v", patchPath)
 	}
 	replacement := Text(patch["value"])
-	if !strings.HasPrefix(replacement, "new") || !strings.HasSuffix(replacement, PreviewSuffix) || len(replacement) > 8300 {
+	if replacement != strings.Repeat("new", 10000) {
 		t.Fatalf("patch value length %d not preview-bounded", len(replacement))
 	}
 }
@@ -178,7 +152,7 @@ func TestRolloutItemMappingAppliesPreviewPolicy(t *testing.T) {
 	doc := `{"payload":{"item":{"result":"` + strings.Repeat("y", 20000) + `"}}}`
 	projection, _ := mustRead(t, strings.NewReader(doc), true)
 	result := Text(obj(t, obj(t, obj(t, projection)["payload"])["item"])["result"])
-	if !strings.HasSuffix(result, PreviewSuffix) || len(result) > PreviewUnits+len(PreviewSuffix) {
+	if result != strings.Repeat("y", 20000) {
 		t.Fatalf("rollout result length %d not preview-bounded", len(result))
 	}
 	plain, _ := mustRead(t, strings.NewReader(doc), false)

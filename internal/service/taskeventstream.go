@@ -12,8 +12,8 @@ import (
 const (
 	// taskEventStreamType is the only content type a task event stream may carry.
 	taskEventStreamType = "text/event-stream"
-	// taskEventLimit bounds one pending line plus one data payload to 1 MiB each.
-	taskEventLimit = 1024 * 1024
+	// taskEventLimit bounds a complete forwarded page plus its SSE framing.
+	taskEventLimit = MaxResponseBytes
 	// taskEventMarker is the SSE event name that reports a failed task stream.
 	taskEventMarker = "error"
 )

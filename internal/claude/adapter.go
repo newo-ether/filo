@@ -18,9 +18,9 @@ import (
 const (
 	DefaultTTL      = 15 * time.Second
 	maxSessions     = 16
-	maxBody         = 64 << 10
+	maxBody         = 4 << 20
 	maxRows         = 128
-	maxSessionBytes = 256 << 10
+	maxSessionBytes = 8 << 20
 	maxRowBytes     = 24 << 10
 	maxEvents       = 24
 	bridgePrefix    = "/claude-mod/v1/"
@@ -47,8 +47,8 @@ type BridgeStatus struct {
 
 // Adapter is both the native SessionAPI and the authenticated loopback handler.
 // State is bounded in memory and discarded on helper restart. Conversation
-// history reads only native records through a source-bound lifecycle transcript
-// path. Native transcripts are never written. Separate registrations cannot assert account continuity.
+// history reads native records through a source-qualified transcript path.
+// Native transcripts are never written. Separate registrations cannot assert account continuity.
 type Adapter struct {
 	mu            sync.Mutex
 	token         string
@@ -80,6 +80,7 @@ type registration struct {
 	activeTurn        string
 	activeHasUser     bool
 	title             *protocol.Text
+	renameReadback    *protocol.Text
 	transcript        string
 	metadata          string
 	completedTurn     string
@@ -95,6 +96,7 @@ type registration struct {
 	settingsAfterTurn string
 	settingsChange    *protocol.SettingsChange
 	requestRevision   uint64
+	discovery         *desktopDiscovery
 	pending           *pendingModCommand
 }
 
@@ -130,18 +132,28 @@ func New(config Config) (*Adapter, error) {
 // Capabilities is the source ceiling. Native Stop still requires a live Mod
 // registration, its abort API, an exact active turn and terminal confirmation.
 func Capabilities() protocol.AdapterCapabilities {
-	return protocol.AdapterCapabilities{History: true, Live: true, Stop: true, Models: true, IdleSend: true, ActiveSend: "native-steer",
-		Settings: []string{"model", "effort"}, HistoryMode: "bounded", LazyMessages: true}
+	return protocol.AdapterCapabilities{History: true, Live: true, Stop: true, IdleSend: true, ActiveSend: "native-steer",
+		Settings: []string{"effort"}, HistoryMode: "bounded", LazyMessages: true}
+}
+
+// DesktopCapabilities is the supported source ceiling. Every Rename still needs
+// a live Desktop registration, exact access binding and current native mapping.
+func DesktopCapabilities() protocol.AdapterCapabilities {
+	caps := Capabilities()
+	caps.Rename = true
+	return caps
 }
 
 func (a *Adapter) Descriptor() protocol.AdapterDescriptor {
 	status := a.Status()
 	id, origin := "claude-code", "cli"
+	caps := Capabilities()
 	if a.origin == "desktop" {
 		id, origin = "claude-desktop", "desktop"
+		caps = DesktopCapabilities()
 	}
 	return protocol.AdapterDescriptor{ID: id, Family: "claude", Origin: origin,
-		State: status.State, Error: status.Error, NativeScopeID: a.scope, Capabilities: Capabilities()}
+		State: status.State, Error: status.Error, NativeScopeID: a.scope, Capabilities: caps}
 }
 
 func (a *Adapter) Status() BridgeStatus {

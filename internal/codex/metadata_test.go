@@ -108,6 +108,13 @@ func TestMetadataNeverReplaysUncertainWritesOrArchivesMismatchedTargets(t *testi
 	if !reflect.DeepEqual(f.methods(), []string{"thread/name/set", "thread/read"}) {
 		t.Fatal(f.methods())
 	}
+	f.failed = false
+	if _, err := m.Rename("task", "name"); err == nil || !strings.Contains(err.Error(), "target is unconfirmed") {
+		t.Fatal("mismatched native rename readback accepted", err)
+	}
+	if !reflect.DeepEqual(f.methods(), []string{"thread/name/set", "thread/read", "thread/name/set", "thread/read"}) {
+		t.Fatal("unconfirmed rename was replayed", f.methods())
+	}
 }
 
 func TestMetadataShutdownFencesWritesAndChecksIdlenessWithoutStoppingTasks(t *testing.T) {

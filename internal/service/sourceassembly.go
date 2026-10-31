@@ -84,6 +84,7 @@ func gatewaySourceAdapters(ids []string, worker *UserWorker, changed func(string
 		sourceID := id
 		proxy := newUserSource(worker, id, func(session string) { changed(sourceID, session) })
 		family, origin, caps := "codex", "cli", desktopSourceCapabilities(attachments != nil)
+		caps.Create = false
 		var store *uploads.Store
 		if id == codexCLISource || id == claudeCodeSource {
 			// Only controlled sources receive path references. Claude additionally
@@ -100,7 +101,7 @@ func gatewaySourceAdapters(ids []string, worker *UserWorker, changed func(string
 			caps.Uploads = store != nil
 		}
 		if id == claudeDesktopSource {
-			family, caps = "claude", claude.Capabilities()
+			family, caps = "claude", claude.DesktopCapabilities()
 		}
 		if id == claudeDesktopSource {
 			origin = "desktop"

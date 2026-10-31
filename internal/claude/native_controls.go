@@ -11,7 +11,7 @@ import (
 )
 
 func ExecutionCapabilities() protocol.AdapterCapabilities {
-	return protocol.AdapterCapabilities{Create: true, History: true, Live: true, IdleSend: true, Stop: true, Models: true,
+	return protocol.AdapterCapabilities{History: true, Live: true, IdleSend: true, Stop: true, Models: true,
 		ActiveSend: "unsupported", Settings: []string{"model", "effort"}, Rename: true, HistoryMode: "bounded", LazyMessages: true}
 }
 

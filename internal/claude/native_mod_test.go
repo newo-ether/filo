@@ -54,7 +54,7 @@ func TestOfficialModNativeValidation(t *testing.T) {
 func TestOfficialModNativeBehavior(t *testing.T) {
 	engine := nativeModTestEngine(t)
 	plugin := t.TempDir()
-	for _, relative := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "observer.test.js"} {
+	for _, relative := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/desktop.mjs", "observer.test.js"} {
 		data, err := os.ReadFile(filepath.Join("mod", filepath.FromSlash(relative)))
 		if err != nil {
 			t.Fatal(err)

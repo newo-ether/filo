@@ -138,7 +138,7 @@ func TestNativeLiveBoundsDiscardWholePayloadAndFinalRestores(t *testing.T) {
 	}
 	nativeLiveEvent(t, s, `{"type":"message_start","message":{"id":"msg_huge_tool","content":[]}}`)
 	nativeLiveEvent(t, s, `{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_big","name":"Read","input":{}}}`)
-	nativeLiveEvent(t, s, fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":%q}}`, strings.Repeat("x", maxRowBytes)))
+	nativeLiveEvent(t, s, fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":%q}}`, strings.Repeat("x", 2<<20)))
 	for _, row := range s.Read().Messages {
 		if row.ID == "toolu_big" {
 			t.Fatal("oversized arguments not bounded")

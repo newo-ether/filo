@@ -9,7 +9,7 @@ import (
 )
 
 // HistoryBoundary describes live observations. Persisted history uses its own
-// signed cursor and the exact lifecycle-reported native transcript path.
+// signed cursor and a source-qualified native transcript path.
 const HistoryBoundary = "observed-since-registration"
 
 func (a *Adapter) List(ctx context.Context, cursor string) (protocol.SessionPage, error) {
@@ -85,6 +85,7 @@ func (a *Adapter) Read(ctx context.Context, id, cursor string, activity bool, ex
 	if len(excludedTurns) != 0 {
 		return protocol.ConversationPage{}, errors.New("Claude observed rows have no proven native turn association")
 	}
+	a.discoverDesktopTranscript(ctx, id)
 	a.refreshTitle(ctx, id)
 	a.mu.Lock()
 	r, err := a.findLocked(id)
@@ -246,10 +247,6 @@ func (a *Adapter) SetModel(ctx context.Context, id, model string) error {
 
 func (a *Adapter) UpdateSettings(ctx context.Context, id string, settings protocol.SessionSettings) error {
 	return a.updateNativeSettings(ctx, id, settings)
-}
-
-func (a *Adapter) Rename(context.Context, string, string) (protocol.Session, error) {
-	return protocol.Session{}, unsupported("rename")
 }
 
 func (a *Adapter) Archive(context.Context, string) (string, error) {

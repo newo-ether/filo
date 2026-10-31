@@ -21,7 +21,7 @@ func (h *cliControlledRuntimeHistory) Read(ctx context.Context, id, cursor strin
 func TestCLIControlledRetiredIdleResendRebindsWithoutReplaying(t *testing.T) {
 	surface, fixture := newCLIControlledFixture(t)
 	ctx := context.Background()
-	if _, _, err := surface.Create(ctx, "hello", "client", protocol.SessionSettings{}); err != nil {
+	if _, _, err := surface.TaskSessions.Create(ctx, "hello", "client", protocol.SessionSettings{}); err != nil {
 		t.Fatal(err)
 	}
 	live, err := surface.Access(ctx, taskSessionsTaskID)
@@ -92,7 +92,7 @@ func TestCLIControlledDormantUnknownAndActiveNeverAcquireWriter(t *testing.T) {
 func TestCLIControlledScopeChangeInvalidatesLiveAccess(t *testing.T) {
 	surface, fixture := newCLIControlledFixture(t)
 	ctx := context.Background()
-	if _, _, err := surface.Create(ctx, "hello", "client", protocol.SessionSettings{}); err != nil {
+	if _, _, err := surface.TaskSessions.Create(ctx, "hello", "client", protocol.SessionSettings{}); err != nil {
 		t.Fatal(err)
 	}
 	access, err := surface.Access(ctx, taskSessionsTaskID)
@@ -110,7 +110,7 @@ func TestCLIControlledScopeChangeInvalidatesLiveAccess(t *testing.T) {
 
 func TestCLIControlledCloseNeverInterruptsAcceptedTurn(t *testing.T) {
 	surface, fixture := newCLIControlledFixture(t)
-	if _, _, err := surface.Create(context.Background(), "hello", "client", protocol.SessionSettings{}); err != nil {
+	if _, _, err := surface.TaskSessions.Create(context.Background(), "hello", "client", protocol.SessionSettings{}); err != nil {
 		t.Fatal(err)
 	}
 	surface.Close()

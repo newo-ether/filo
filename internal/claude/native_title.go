@@ -41,7 +41,12 @@ func (a *Adapter) refreshTitle(ctx context.Context, id string) {
 		return
 	}
 	if title != nil {
-		r.title = title
+		// Persisted metadata can lag the exact post-mutation native readback.
+		// Keep that confirmed title until the store catches up or fresh lifecycle
+		// evidence supplies a later title.
+		if r.renameReadback == nil || *r.renameReadback == *title {
+			r.title, r.renameReadback = title, nil
+		}
 	}
 	if metadata != "" {
 		r.metadata = metadata
@@ -80,22 +85,37 @@ func desktopMetadataTitle(path, id string) *protocol.Text {
 }
 
 func desktopMetadataPath(ctx context.Context, id string) string {
+	var found string
+	walkDesktopMetadata(ctx, func(path string) bool {
+		if desktopMetadataTitle(path, id) == nil {
+			return true
+		}
+		found = path
+		return false
+	})
+	return found
+}
+
+// The visitor returns false when it has enough evidence. A false walk result
+// also reports a missing, oversized or incomplete store to identity resolution.
+func walkDesktopMetadata(ctx context.Context, visit func(string) bool) bool {
 	local := os.Getenv("LOCALAPPDATA")
 	if local == "" {
-		return ""
+		return false
 	}
 	root := filepath.Join(local, "Claude-3p", "claude-code-sessions")
 	users, err := os.ReadDir(root)
 	if err != nil || len(users) > 128 {
-		return ""
+		return false
 	}
-	inspected := 0
+	complete, inspected := true, 0
 	for _, user := range users {
 		if !user.IsDir() || user.Type()&os.ModeSymlink != 0 {
 			continue
 		}
-		accounts, _ := os.ReadDir(filepath.Join(root, user.Name()))
-		if len(accounts) > 128 {
+		accounts, err := os.ReadDir(filepath.Join(root, user.Name()))
+		if err != nil || len(accounts) > 128 {
+			complete = false
 			continue
 		}
 		for _, account := range accounts {
@@ -103,26 +123,26 @@ func desktopMetadataPath(ctx context.Context, id string) string {
 				continue
 			}
 			directory := filepath.Join(root, user.Name(), account.Name())
-			files, _ := os.ReadDir(directory)
-			if len(files) > 1024 {
+			files, err := os.ReadDir(directory)
+			if err != nil || len(files) > 1024 {
+				complete = false
 				continue
 			}
 			for _, file := range files {
 				if ctx.Err() != nil || inspected >= 1024 {
-					return ""
+					return false
 				}
 				if file.IsDir() || !strings.HasSuffix(file.Name(), ".json") {
 					continue
 				}
 				inspected++
-				path := filepath.Join(directory, file.Name())
-				if desktopMetadataTitle(path, id) != nil {
-					return path
+				if !visit(filepath.Join(directory, file.Name())) {
+					return false
 				}
 			}
 		}
 	}
-	return ""
+	return complete && ctx.Err() == nil
 }
 
 func transcriptTitle(path, id string) *protocol.Text {
@@ -175,24 +195,36 @@ func transcriptTitle(path, id string) *protocol.Text {
 		}
 	}
 	lines := strings.Split(string(data), "\n")
-	var title *protocol.Text
+	var title, custom *protocol.Text
 	for _, line := range lines {
 		var row struct {
 			Type    string         `json:"type"`
 			Session string         `json:"sessionId"`
 			Custom  *protocol.Text `json:"customTitle"`
+			AI      *protocol.Text `json:"aiTitle"`
 			Summary *protocol.Text `json:"summary"`
 		}
 		if json.Unmarshal([]byte(line), &row) != nil || row.Session != "" && row.Session != id {
 			continue
 		}
-		value := row.Custom
-		if row.Type == "summary" {
+		var value *protocol.Text
+		switch row.Type {
+		case "custom-title":
+			if row.Custom != nil && len(*row.Custom) <= 4096 {
+				custom = row.Custom
+			}
+		case "ai-title":
+			value = row.AI
+		case "summary":
 			value = row.Summary
 		}
-		if (row.Type == "custom-title" || row.Type == "summary") && value != nil && len(*value) <= 4096 {
+		if value != nil && len(*value) <= 4096 {
 			title = value
 		}
+	}
+	// A generated title must not override the person's explicit rename.
+	if custom != nil {
+		return custom
 	}
 	return title
 }

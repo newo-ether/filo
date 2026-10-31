@@ -151,25 +151,11 @@ func (a *Adapter) releaseMutation(id, nonce string, pending *pendingModCommand) 
 }
 
 func (a *Adapter) updateNativeSettings(ctx context.Context, id string, settings protocol.SessionSettings) error {
-	if settings.ServiceTier.Known || !settings.Model.Known && !settings.Effort.Known {
+	if settings.ServiceTier.Known || settings.Model.Known || !settings.Effort.Known {
 		return unsupported("settings")
 	}
 	if settings.Effort.Known && !namedEffort(settings.Effort.Value) {
 		return errors.New("Invalid Claude effort")
-	}
-	if settings.Model.Known {
-		a.mu.Lock()
-		r, err := a.findLocked(id)
-		found := false
-		if err == nil {
-			for _, model := range r.modelOptions {
-				found = found || model == settings.Model.Value
-			}
-		}
-		a.mu.Unlock()
-		if !found {
-			return errors.New("Claude model is outside native catalog")
-		}
 	}
 	pending, nonce, err := a.queueMutation(ctx, id, modCommand{Operation: "settings", Settings: &settings})
 	if err != nil {

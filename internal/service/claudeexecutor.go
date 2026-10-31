@@ -261,18 +261,8 @@ func (s *ClaudeExecutorSessions) Status() AdapterStatus {
 	return sourceStatus("unavailable", "claude_native_handshake_unavailable")
 }
 
-func (s *ClaudeExecutorSessions) Create(ctx context.Context, text, client string, settings protocol.SessionSettings) (protocol.Session, protocol.SendReceipt, error) {
-	response, err := s.call(ctx, claudeBrokerRequest{Operation: "create", Text: text, ClientID: client, Settings: settings}, true)
-	if err != nil {
-		return protocol.Session{}, protocol.SendReceipt{}, err
-	}
-	if response.Session == nil || response.Receipt == nil {
-		return protocol.Session{}, protocol.SendReceipt{}, errors.New("Claude native acceptance is unavailable")
-	}
-	if s.options.OnChange != nil {
-		s.options.OnChange(response.Session.ID)
-	}
-	return *response.Session, *response.Receipt, nil
+func (s *ClaudeExecutorSessions) Create(context.Context, string, string, protocol.SessionSettings) (protocol.Session, protocol.SendReceipt, error) {
+	return protocol.Session{}, protocol.SendReceipt{}, sourceUnsupported()
 }
 
 func (s *ClaudeExecutorSessions) Models(ctx context.Context) ([]protocol.Model, error) {
@@ -284,12 +274,6 @@ func (s *ClaudeExecutorSessions) Models(ctx context.Context) ([]protocol.Model, 
 	s.mu.Unlock()
 	if closed {
 		return nil, errors.New("Claude execution client is closed")
-	}
-	if native, ok := s.options.ReadOnly.(*claude.Adapter); ok {
-		models, err := native.Models(ctx)
-		if err != nil || len(models) > 0 {
-			return models, err
-		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()

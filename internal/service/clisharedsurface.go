@@ -34,6 +34,8 @@ func (s *CLIControlledSessions) sharedAccess(ctx context.Context, id string) (pr
 		return protocol.SessionAccess{}, err
 	}
 	identity := codexReadIdentity(scope, id)
+	caps := s.Capabilities()
+	access.Capabilities.Models, access.Capabilities.Usage = caps.Models, caps.Usage
 	access.NativeScopeID, access.CanonicalSessionRef = scope, identity.CanonicalSessionRef
 	access.Binding = s.shared.taskBinding(id, "cli-shared-scope", scope, access.Binding)
 	after, err := s.scope(ctx)

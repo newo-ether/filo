@@ -47,6 +47,9 @@ func (sessions *DesktopSessions) Models(ctx context.Context) ([]protocol.Model, 
 
 // Rename changes the native task name.
 func (sessions *DesktopSessions) Rename(ctx context.Context, id, name string) (protocol.Session, error) {
+	if err := sessions.validateMetadataAccess(ctx, id); err != nil {
+		return protocol.Session{}, err
+	}
 	if sessions.options.Base == nil {
 		return protocol.Session{}, errSessionCatalog
 	}
@@ -68,6 +71,9 @@ func (sessions *DesktopSessions) Archive(ctx context.Context, id string) (string
 	}
 	if sessions.options.Base == nil {
 		return "", errSessionCatalog
+	}
+	if err := sessions.validateMetadataAccess(ctx, id); err != nil {
+		return "", err
 	}
 	cwd, err := sessions.options.Base.Archive(ctx, id)
 	if err != nil {

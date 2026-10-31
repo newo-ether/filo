@@ -132,8 +132,10 @@ func StartNative(ctx context.Context, options NativeOptions) (*NativeSession, er
 		input.Close()
 		return nil, errors.New("Claude native model catalog is invalid")
 	}
+	seen := map[string]bool{}
 	for _, model := range models {
-		if validNativeModel(model.Value) {
+		if validNativeModel(model.Value) && !seen[model.Value] {
+			seen[model.Value] = true
 			entry := protocol.Model{ID: model.Value, Name: protocol.Text(model.DisplayName)}
 			if model.SupportsEffort {
 				entry.ReasoningEfforts = validEffortLevels(model.SupportedEffortLevels)

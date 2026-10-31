@@ -3,6 +3,10 @@
 Use service.NewPublicServer for the public listener. NewServer remains an internal
 application handler for authenticated private loopback executor connections and
 application tests. Never expose the plain handler as a compatibility fallback.
+The public gateway supports `0.0.0.0` (all IPv4 interfaces), loopback and explicit
+tailnet IPv4 binding. Wildcard listening keeps the same authenticated encryption
+requirements; a plaintext bearer request is still rejected. Private workers and
+the Claude bridge remain authenticated loopback-only endpoints.
 
 thirdparty/conch contains unmodified runtime files from the upstream Conch revision
 recorded in UPSTREAM.json, with its license and per-file SHA-256 provenance. Do not
@@ -34,6 +38,17 @@ These tests do not qualify native service assembly, production installation, rea
 native attachment consumption or Codex failure isolation. Complete those gates before
 installing the strict Agora encrypted client. No production downgrade is supported.
 
+## Tool payload budgets
+
+Conversation pages are bounded at 3 MiB / 128 records; complete application
+responses, private SSE page decoding and user-worker forwarding at 4 MiB. Tool previews limit decoded
+leaves and reserialize complete JSON, including nested JSON strings; serialized
+JSON is never prefix-cut. Extreme native snapshots fail closed at 64 MiB retained
+state. Private Codex executor requests remain bounded at 1 MiB, while native
+response packets use a separate 64 MiB hard rejection bound before tool projection.
+These bounds preserve native records and do not change the encrypted
+channel's 512 KiB request / 16 KiB response chunk sizes.
+
 ## Timestamp units
 
 Session `updatedAt` uses integer Unix seconds, including create and rename responses.
@@ -62,9 +77,9 @@ A route's presence does not grant that operation to every source or session:
 | Source | Control surface |
 | --- | --- |
 | `codex-desktop` | Verified native Desktop control and bounded history, subject to current owner capabilities |
-| `codex-cli` | Loaded original sessions through the existing verified native daemon; separate creation/control of Filo-owned CLI tasks and bounded exact-ID history |
-| `claude-code` | Original Mod observation/catalog/request-effort/exact-turn Stop; separate Filo-owned native stream-json execution |
-| `claude-desktop` | Code Mod observation/catalog/request-effort/Stop implementation, pending embedded-engine runtime qualification; no Chat or Cowork support |
+| `codex-cli` | Loaded original sessions through the existing verified native daemon; existing Filo-owned task control and bounded exact-ID history; no creation |
+| `claude-code` | Original Mod observation/request-effort/exact-turn Stop; existing Filo-owned native stream-json execution and its own runtime model catalog; no creation |
+| `claude-desktop` | Code Mod observation/request-effort/Stop and bound native Rename; no external model catalog or model switching; no Chat or Cowork support |
 
 Session, conversation and topology access metadata separates shared verified native
 identity (`nativeScopeId`, `canonicalSessionRef`) from revocable control (`binding`,
@@ -73,24 +88,46 @@ Codex canonical identity is base64url(SHA256(JSON(["codex", scope, nativeSession
 Only verified account/store continuity allows shared drafts or unread records.
 
 Fresh private-worker discovery can only narrow the configured capability ceiling.
-A failed or malformed discovery discards earlier authority. Catalog access may be
-cached and read-only; existing-session control requires a fresh private-worker
-access read, with scope verified before and after it. Per-session access can narrow
-Send, Stop and settings as the owner and active execution change. Clients must use
-that access rather than treating source-level capabilities as a session grant.
+A failed or malformed discovery discards earlier authority. Catalog access does not
+admit execution. Codex Desktop catalog rows may grant native rename/archive with an
+account/store and exact-row binding, without discovering an execution owner or
+loading a follower. Send, Stop and settings require fresh execution access, with
+scope verified before and after it. Per-session access can narrow those operations
+as the owner and active execution change. Clients must use that access rather than
+treating source-level capabilities as a session grant. Codex CLI session access retains
+its source's read-only model and account-usage capabilities on both shared-daemon and
+owned-task paths. Narrowing execution access must not suppress the catalog needed to
+present the native model name and supported reasoning-effort choices.
+
+Claude Desktop Rename uses the same permission-preserving fixed native self
+read/title mutation/self read sequence qualified by a real temporary rename and
+restoration. Public source support still requires current per-session access,
+exact registration binding, unchanged scope and a unique persisted engine/host
+mapping. Only exact applied identity/title readback updates projected titles;
+timeout, refusal, cancellation or changed mappings never project or replay the
+requested title. Native title consent remains in Claude. The new public Go route
+has separate worker/encrypted-gateway tests and awaits installation of its new
+candidate. See [the capability evidence](claude-desktop-native-capabilities.md).
 
 Existing-session mutations carry `accessBinding` in the encrypted JSON body. The
-server removes it before parsing settings and validates the exact native scope,
-owner/connection generation and turn again at dispatch. The gateway preserves the
-private worker's sealed binding and forwards one same-source mutation with it;
-the worker independently validates its own binding before native dispatch. An
-arbitrary HTTP header is not a transport for this field: the unchanged Conch
+server removes it before parsing settings and validates the exact native scope and
+operation-specific binding again at dispatch. Execution bindings also include the
+owner/connection generation and turn; catalog management bindings grant no execution.
+The gateway preserves the private worker's sealed binding and forwards one same-source
+mutation with it; the worker independently validates its own binding before native
+dispatch. An arbitrary HTTP header is not a transport for this field: the unchanged Conch
 encrypted envelope forwards only method, path, contentType and body. Pending input,
 Stop or settings never switch sources or replay when an owner changes.
 
-Create and upload initialization carry the captured descriptor's `nativeScopeId`
-in encrypted JSON. The server independently captures fresh scope, compares it before
-admission, removes the field and propagates a local scope validator to final native
+Both CLI sources advertise `create:false` at the gateway and private worker.
+Scoped `POST /v1/adapters/codex-cli/sessions` and
+`POST /v1/adapters/claude-code/sessions` return HTTP 501 before native dispatch.
+Their source Create methods refuse executor/broker allocation. Existing admitted
+sessions and previously accepted work retain their controls and native lifetime.
+
+Create (where supported) and upload initialization carry the captured descriptor's
+`nativeScopeId` in encrypted JSON. The server independently captures fresh scope,
+compares it before admission, removes the field and propagates a local scope validator to final native
 dispatch. Private creation forwarding carries the captured scope in JSON and
 reconstructs its own validator; a Go context does not cross HTTP. Creation also
 requires the first message and `clientId`; source selection never creates an empty
@@ -144,21 +181,48 @@ message ID; rows lacking the required native identity are not published. Display
 block IDs may add a block index while retaining the native identity separately.
 Child/subagent events with `parent_tool_use_id` are excluded from the parent
 projection. Thinking signatures and redacted thinking are not public text. The
-native projection retains at most 128 rows, 24 KiB per serialized row and 256 KiB
-per session; oldest rows are evicted to stay within the window. Oversized rows are
+native projection retains at most 128 rows and 8 MiB per session. Ordinary text rows
+are capped at 24 KiB serialized; tool rows at 2 MiB including JSON escaping. Tool
+arguments/results are parsed before leaf strings are bounded (256 KiB text target,
+384 KiB serialized field). Original Mod observation uses a 3 MiB event batch,
+4 MiB bridge body and 96 events / 8 Mi UTF-16 queue units. Oldest rows are evicted
+to stay within the window. Oversized rows are
 omitted as whole rows, not exposed as apparently complete truncated suffixes.
 These windows are not a complete or durable native transcript. Source-level
-Claude Code model reads prefer a verified live Mod catalog; otherwise a disposable
-native stream-json initialization reads metadata without a user message, session
-creation or execution broker. Each read verifies source scope and closes only its
+Claude Code model reads use the selected CLI runtime's disposable
+stream-json initialization to read metadata without a user message, session
+creation or execution broker. Mod configuration aliases never override that
+catalog. Native IDs, labels and effort metadata are preserved; exact duplicate
+IDs retain their first entry. Each read verifies source scope and closes only its
 own task-free input. Neither Claude source advertises account usage.
 
 Media output rows remain unsupported. The owned executor denies native approval
 requests. Original or unknown native sessions gain no control from a shared ID or
 readable history. Source-matching Mod registration independently admits bounded
-text observation, native model options, current model, observed main-loop request
-effort and exact-turn Stop. Observation starts at registration and does not recover
-pre-registration history or thinking/tool/media rows. Stop is bound to that live
+text observation, current model, observed main-loop request
+effort and exact-turn Stop. Mod `config.list` choices are unresolved configuration
+aliases, not provider-ready model IDs. Mod sessions advertise `models:false` and
+only `effort` in settings; model updates are refused before dispatch. Desktop's
+model route returns HTTP 501 rather than borrowing the CLI catalog. Effort remains
+independent of model catalog availability. Live observation starts at registration.
+A source-bound lifecycle transcript path also permits bounded older text, thinking
+and tool calls. An existing Desktop registration without that event may discover the
+same transcript only through the exact persisted native host/engine mapping and one
+unique engine-UUID JSONL in the selected projects store. Discovery scans at most 1024
+project entries and does not create a registration, infer runtime or grant control.
+Text/thinking preserve native UUIDs; a tool row uses native
+`tool_use.id` as its ID/nativeID and the assistant UUID as its group, without an
+invented turn. Only a qualified earlier call and matching user `tool_result` join;
+results do not create separate rows. Matched `is_error` determines failed/succeeded;
+missing or ambiguous results leave unknown state. Thinking/tools require an
+activity-enabled read, and signatures/redacted data stay private. Source pages
+scan at most 8 MiB and emit at most 128 rows / 3 MiB; matching may inspect at most
+8 MiB of newer bytes toward the signed fixed snapshot end. Results outside that
+bounded lookup stay unknown. Tool fields share the decoded JSON preview budgets.
+History does not reconstruct media or branch ancestry. An unavailable initial
+transcript preserves the live window; old history cursors fail explicitly and
+appends cannot supply results to an older snapshot. History grants no runtime or
+control authority. Stop is bound to that live
 registration and exact turn, delivered once, and requires both its matching command
 result and same-turn native completion. Registration loss or an uncertain outcome
 never causes replay. Native authentication and configuration remain untouched.
@@ -175,7 +239,7 @@ returned row UUID and full text. It joins subsequent requests in the current loo
 there is no promise to alter an in-flight request or start another request after
 completion. Observation confirms the stored input, not model consumption.
 
-Mod model/effort changes are session-local choices for subsequent main turns,
+Mod effort changes are session-local choices for subsequent main turns,
 not persistent native configuration writes. `runtime.settingsChange` contains the
 command `id`, `requested`, and `state: "pending" | "confirmed" | "failed"`.
 ACK stays pending. Confirmation requires the settled engine/core `turn.step`

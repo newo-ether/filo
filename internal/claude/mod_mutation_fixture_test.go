@@ -116,5 +116,53 @@ for (const surface of ['terminal','desktop']) {
   const replacement={turnId:'replacement',index:0,model:'original',effort:'high'}
   await selectedStep(replacement,replacement)
 }
+for (const surface of ['terminal', 'desktop']) {
+  let command
+  const immediate=fixture({surfaces:[surface],response:(action,body,response)=>
+    action==='pull' && command ? {...response,commands:[command]} : response})
+  await immediate.call('session.start')
+  await settle()
+  command={id:'q'.repeat(43),operation:'settings',settings:{effort:'low'}}
+  await immediate.timers.at(-1).fn()
+  command=undefined
+  const nativeID=immediate.$.session.id
+  let finishIdentity
+  const pendingIdentity=new Promise(resolve=>{finishIdentity=resolve})
+  immediate.$.session.id=async()=>{await pendingIdentity;return nativeID()}
+  await immediate.call('turn.start',{turnId:'immediate-next-turn'})
+  const event={turnId:'immediate-next-turn',index:0,model:'native-model',effort:'high'}
+  const stream=immediate.hooks.get('turn.step')(immediate.$,event,async function* (request) {
+    assert.equal(request.effort,'low','async start observation lost next-turn effort on '+surface)
+    return {turnId:event.turnId,index:0,answer:'',toolUses:[],stopReason:'end_turn',usage:{}}
+  })
+  try {
+    await stream.next()
+    immediate.$.session.id=nativeID
+    for (const foreign of [{...event,agentId:'child'}, {...event,turnId:'stale-turn'}]) {
+      const unchanged=immediate.hooks.get('turn.step')(immediate.$,foreign,async function* (request) {
+        assert.equal(request,foreign,'first-turn fix rewrote a child or stale request')
+      })
+      await unchanged.next()
+    }
+    command={id:'w'.repeat(43),operation:'settings',settings:{effort:'medium'}}
+    await immediate.timers.at(-1).fn()
+    command=undefined
+    const current=immediate.hooks.get('turn.step')(immediate.$,event,async function* (request) {
+      assert.equal(request,event,'settings received during async start changed the current turn')
+    })
+    await current.next()
+  } finally {
+    finishIdentity()
+    immediate.$.session.id=nativeID
+    await settle()
+  }
+  await immediate.call('turn.complete',{turnId:event.turnId})
+  await immediate.call('turn.start',{turnId:'following-turn'})
+  const following={...event,turnId:'following-turn'}
+  const selected=immediate.hooks.get('turn.step')(immediate.$,following,async function* (request) {
+    assert.equal(request.effort,'medium','settings during async start were lost on the following turn')
+  })
+  await selected.next()
+}
 console.log('official Mod input and next-request settings fixtures passed')
 `

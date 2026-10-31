@@ -29,8 +29,8 @@ func validateBlock(e modEvent) error {
 	}
 	b := e.Block
 	if b == nil || !opaque.MatchString(e.TurnID) || b.Step < 0 || b.Step > 1000000 || b.Index < 0 || b.Index >= maxRows ||
-		len(b.Text) > maxRowBytes || len(b.ToolName) > 256 || b.Arguments != nil && len(*b.Arguments) > maxRowBytes ||
-		b.Result != nil && len(*b.Result) > maxRowBytes {
+		len(b.Text) > maxRowBytes || len(b.ToolName) > 256 || b.Arguments != nil && len(*b.Arguments) > 384<<10 ||
+		b.Result != nil && len(*b.Result) > 384<<10 {
 		return errors.New("Invalid bounded native block")
 	}
 	if b.Type != "text" && b.Type != "thought" && b.Type != "tool" {

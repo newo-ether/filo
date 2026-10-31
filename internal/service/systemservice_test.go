@@ -23,12 +23,12 @@ import (
 
 // TestSystemServiceEntryRejectsMalformedPrivateConfigWithoutChangingIt pins the
 // first gate of the service: a configuration that cannot be decoded, or one that
-// names a published endpoint, stops the service before any port, credential or
+// names an unsupported endpoint, stops the service before any port, credential or
 // desktop resource is touched, and the file it read stays exactly as it was.
 func TestSystemServiceEntryRejectsMalformedPrivateConfigWithoutChangingIt(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, entryConfigName)
-	for _, content := range []string{"{", `{"bind":"0.0.0.0","port":7435}`} {
+	for _, content := range []string{"{", `{"bind":"192.168.1.2","port":7435}`} {
 		writeEntryFixtureFile(t, path, content)
 		var diagnostic strings.Builder
 		if code := runSystemService(systemServiceOptions{Directory: directory, Output: io.Discard, Error: &diagnostic}); code != 1 {
@@ -47,10 +47,16 @@ func TestSystemServiceEntryRejectsMalformedPrivateConfigWithoutChangingIt(t *tes
 // answering every later request, and still shuts down on request. Neither the
 // private configuration nor the unprepared helper credential is rewritten.
 func TestSystemServiceGatewayStaysReachableWithoutTheOriginalDesktop(t *testing.T) {
+	for _, bind := range []string{"127.0.0.1", "0.0.0.0"} {
+		t.Run(bind, func(t *testing.T) { testSystemServiceGatewayWithoutDesktop(t, bind) })
+	}
+}
+
+func testSystemServiceGatewayWithoutDesktop(t *testing.T, bind string) {
 	directory := t.TempDir()
 	port := reserveLoopbackPort(t)
 	config := Marshal(map[string]any{
-		"bind":            "127.0.0.1",
+		"bind":            bind,
 		"port":            port,
 		"desktopSid":      "S-1-5-21-1-2-3-1001",
 		"workerUrl":       "http://127.0.0.1:1",
@@ -95,6 +101,12 @@ func TestSystemServiceGatewayStaysReachableWithoutTheOriginalDesktop(t *testing.
 	}
 	if response := get(t, base+"/v1/info", nil); response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("anonymous status = %d", response.StatusCode)
+	} else {
+		response.Body.Close()
+	}
+	if response := get(t, base+"/v1/info", authHeaders()); response.StatusCode != http.StatusUnauthorized {
+		response.Body.Close()
+		t.Fatalf("plaintext bearer status = %d", response.StatusCode)
 	} else {
 		response.Body.Close()
 	}

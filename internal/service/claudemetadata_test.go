@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/newo-ether/filo/internal/claude"
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
@@ -43,6 +45,16 @@ func runClaudeMetadataHelper() int {
 		}
 		var models any = []any{map[string]any{"value": "native-model", "displayName": "Native model",
 			"supportsEffort": true, "supportedEffortLevels": []string{"low", "high"}}}
+		if os.Getenv("FILO_TEST_CLAUDE_METADATA") == "duplicates" {
+			models = []any{
+				map[string]any{"value": "default", "displayName": "Default (recommended)"},
+				map[string]any{"value": "opus", "displayName": "deepseek-v4-pro[1m]", "supportsEffort": true, "supportedEffortLevels": []string{"high"}},
+				map[string]any{"value": "fable", "displayName": "deepseek-v4-pro[1m]"},
+				map[string]any{"value": "opus", "displayName": "duplicate must not replace first"},
+				map[string]any{"value": "sonnet", "displayName": "deepseek-v4-flash[1m]"},
+				map[string]any{"value": "haiku", "displayName": "deepseek-v4-flash[1m]"},
+			}
+		}
 		if os.Getenv("FILO_TEST_CLAUDE_METADATA") == "invalid" {
 			models = "invalid catalog"
 		}
@@ -53,8 +65,33 @@ func runClaudeMetadataHelper() int {
 	return 0
 }
 
+func seedClaudeMetadataMod(t *testing.T, mod *claude.Adapter) {
+	t.Helper()
+	call := func(action string, body map[string]any) map[string]any {
+		t.Helper()
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := httptest.NewRequest("POST", "/claude-mod/v1/"+action, strings.NewReader(string(data)))
+		request.RemoteAddr = "127.0.0.1:54321"
+		request.Header.Set("Authorization", "Bearer "+testToken)
+		response := httptest.NewRecorder()
+		mod.ServeHTTP(response, request)
+		var result map[string]any
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &result) != nil {
+			t.Fatalf("Mod metadata fixture %s status=%d", action, response.Code)
+		}
+		return result
+	}
+	const session = "11111111-1111-4111-8111-111111111111"
+	registered := call("register", map[string]any{"sessionId": session, "instance": "metadata", "origin": "terminal"})
+	call("push", map[string]any{"sessionId": session, "nonce": registered["nonce"], "sequence": 1,
+		"events": []any{map[string]any{"kind": "snapshot", "modelOptions": []string{"best", "sonnet[1m]"}, "canSettings": true}}})
+}
+
 func TestClaudeModelsBootstrapWithoutSessionOrBroker(t *testing.T) {
-	for _, mode := range []string{"success", "invalid", "cancelled", "scope-changed", "closed"} {
+	for _, mode := range []string{"success", "duplicates", "invalid", "cancelled", "scope-changed", "closed"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
 			logPath := filepath.Join(root, "native.log")
@@ -64,9 +101,14 @@ func TestClaudeModelsBootstrapWithoutSessionOrBroker(t *testing.T) {
 			if mode == "cancelled" {
 				t.Setenv("FILO_TEST_CLAUDE_METADATA", "blocked")
 			}
+			mod, err := claude.New(claude.Config{Token: testToken, NativeScopeID: "metadata-fixture"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedClaudeMetadataMod(t, mod)
 			launches := 0
 			s, err := NewClaudeExecutorSessions(ClaudeExecutorOptions{Directory: filepath.Join(root, "broker"),
-				Workspace: root, NativeScopeID: "metadata-fixture", Executable: os.Args[0],
+				Workspace: root, NativeScopeID: "metadata-fixture", Executable: os.Args[0], ReadOnly: mod,
 				Launch: func(string) error { launches++; return nil }})
 			if err != nil {
 				t.Fatal(err)
@@ -91,6 +133,20 @@ func TestClaudeModelsBootstrapWithoutSessionOrBroker(t *testing.T) {
 			if mode == "success" {
 				if err != nil || len(models) != 1 || models[0].ID != "native-model" || len(models[0].ReasoningEfforts) != 2 || checks != 2 {
 					t.Fatalf("native catalog missing: models=%v checks=%d err=%v", models, checks, err)
+				}
+			} else if mode == "duplicates" {
+				want := []string{"default", "opus", "fable", "sonnet", "haiku"}
+				if err != nil || len(models) != len(want) || checks != 2 {
+					t.Fatalf("native deduplication failed: models=%+v err=%v", models, err)
+				}
+				for i, id := range want {
+					if models[i].ID != id {
+						t.Fatalf("native choice identity changed: %+v", models)
+					}
+				}
+				if models[0].Name != "Default (recommended)" || models[1].Name != "deepseek-v4-pro[1m]" ||
+					len(models[1].ReasoningEfforts) != 1 || models[2].Name != models[1].Name || models[3].Name != models[4].Name {
+					t.Fatalf("native labels/effort or distinct same-label choices changed: %+v", models)
 				}
 			} else if err == nil || len(models) != 0 {
 				t.Fatalf("failed metadata read published models: mode=%s models=%v err=%v", mode, models, err)

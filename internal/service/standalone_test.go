@@ -320,8 +320,14 @@ func TestStandaloneGatewayWithdrawsBeforeAdmissionWhenStartupIsCancelled(t *test
 }
 
 func TestPrivateUserHelperRefusesNetworkPublication(t *testing.T) {
+	for _, bind := range []string{"100.100.10.1", "0.0.0.0"} {
+		t.Run(bind, func(t *testing.T) { testPrivateUserHelperRefusesBind(t, bind) })
+	}
+}
+
+func testPrivateUserHelperRefusesBind(t *testing.T, bind string) {
 	directory := t.TempDir()
-	config := Marshal(map[string]any{"appServerUrl": "ws://127.0.0.1:9999", "bind": "100.100.10.1", "port": 9998})
+	config := Marshal(map[string]any{"appServerUrl": "ws://127.0.0.1:9999", "bind": bind, "port": 9998})
 	writeEntryFixtureFile(t, filepath.Join(directory, entryConfigName), string(config))
 	writeEntryFixtureFile(t, filepath.Join(directory, entryTokenName), entryTestToken(t))
 	var diagnostic strings.Builder

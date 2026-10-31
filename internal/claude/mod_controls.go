@@ -11,18 +11,22 @@ import (
 
 // Commands are delivered once. A lost response never permits a native replay.
 type modCommand struct {
-	ID        string                    `json:"id"`
-	Operation string                    `json:"operation"`
-	TurnID    string                    `json:"turnId,omitempty"`
-	Text      string                    `json:"text,omitempty"`
-	ClientID  string                    `json:"clientId,omitempty"`
-	Settings  *protocol.SessionSettings `json:"settings,omitempty"`
+	HostSessionID string                    `json:"hostSessionId,omitempty"`
+	ID            string                    `json:"id"`
+	Operation     string                    `json:"operation"`
+	Title         string                    `json:"title,omitempty"`
+	TurnID        string                    `json:"turnId,omitempty"`
+	Text          string                    `json:"text,omitempty"`
+	ClientID      string                    `json:"clientId,omitempty"`
+	Settings      *protocol.SessionSettings `json:"settings,omitempty"`
 }
 
 type modCommandResult struct {
-	ID      string `json:"id"`
-	OK      bool   `json:"ok"`
-	Refusal string `json:"refusal,omitempty"`
+	Rename   *desktopMetadata `json:"rename,omitempty"`
+	Metadata *desktopMetadata `json:"metadata,omitempty"`
+	ID       string           `json:"id"`
+	OK       bool             `json:"ok"`
+	Refusal  string           `json:"refusal,omitempty"`
 }
 
 func (r modCommandResult) inputError() error {
@@ -41,12 +45,13 @@ func (r modCommandResult) inputError() error {
 }
 
 type pendingModCommand struct {
-	command   modCommand
-	ctx       context.Context
-	delivered bool
-	completed bool
-	result    *modCommandResult
-	changed   chan struct{}
+	desktopIdentity *desktopIdentity
+	command         modCommand
+	ctx             context.Context
+	delivered       bool
+	completed       bool
+	result          *modCommandResult
+	changed         chan struct{}
 }
 
 func (a *Adapter) stopNative(ctx context.Context, id, turnID string) error {
@@ -153,7 +158,9 @@ func (a *Adapter) pull(w http.ResponseWriter, input envelope) {
 		pending.ctx.Err() == nil && ((pending.command.Operation == "stop" && r.canStop && r.status == "active" && r.activeTurn == pending.command.TurnID) ||
 		(pending.command.Operation == "send" && r.canInput && r.activeTurn == pending.command.TurnID &&
 			(r.status == "active" || r.status == "idle" || r.status == "unknown")) ||
-		(pending.command.Operation == "settings" && r.canSettings)) {
+		(pending.command.Operation == "settings" && r.canSettings) ||
+		((pending.command.Operation == "desktop-metadata" || pending.command.Operation == "desktop-rename") &&
+			r.origin == "desktop" && pending.desktopIdentity.unchanged())) {
 		pending.delivered = true
 		result.Commands = append(result.Commands, pending.command)
 	}
@@ -165,10 +172,21 @@ func (a *Adapter) commandResultLocked(r *registration, input envelope) error {
 		!r.pending.delivered || r.pending.command.ID != input.Result.ID {
 		return errors.New("Claude native command result does not match dispatched control")
 	}
-	if r.pending.result != nil && *r.pending.result != *input.Result {
+	if err := validateMetadataResult(r, input.Result); err != nil {
+		return err
+	}
+	if r.pending.result != nil && !sameModCommandResult(r.pending.result, input.Result) {
 		return errors.New("Claude native command result changed")
 	}
 	result := *input.Result
+	if result.Metadata != nil {
+		metadata := *result.Metadata
+		result.Metadata = &metadata
+	}
+	if result.Rename != nil {
+		rename := *result.Rename
+		result.Rename = &rename
+	}
 	r.pending.result = &result
 	if r.pending.command.Operation == "send" {
 		if input := findModInput(r, r.pending.command.ClientID); input != nil {
@@ -191,8 +209,10 @@ func (a *Adapter) commandResultLocked(r *registration, input envelope) error {
 
 func (a *Adapter) registrationCapabilities(r *registration) protocol.AdapterCapabilities {
 	caps := Capabilities()
+	if a.origin == "desktop" && r.origin == "desktop" {
+		caps.Rename = resolveDesktopIdentity(context.Background(), r.nativeID) != nil
+	}
 	caps.Stop = r.canStop && r.status == "active" && r.activeTurn != ""
-	caps.Models = len(r.modelOptions) > 0
 	caps.IdleSend = r.canInput
 	if r.canInput {
 		caps.ActiveSend = "native-steer"

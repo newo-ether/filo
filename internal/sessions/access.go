@@ -99,6 +99,9 @@ func (sessions *DesktopSessions) accessScope(ctx context.Context, id string) (st
 }
 
 func (sessions *DesktopSessions) ValidateAccess(ctx context.Context, id, binding string) error {
+	if catalog, err := sessions.CatalogAccess(ctx, id); err == nil && sameBinding(binding, catalog.Binding) {
+		return protocol.ValidateScope(ctx)
+	}
 	access, err := sessions.currentAccess(ctx, id)
 	if err != nil {
 		return err
@@ -132,6 +135,7 @@ func (sessions *DesktopSessions) readCapabilities() protocol.AdapterCapabilities
 	return protocol.AdapterCapabilities{
 		History: sessions.options.History != nil, LazyMessages: sessions.options.History != nil,
 		Models: sessions.options.Base != nil, HistoryMode: "bounded",
+		Rename: sessions.options.Base != nil, Archive: sessions.options.Base != nil,
 		ActiveSend: "unsupported", Settings: []string{},
 	}
 }

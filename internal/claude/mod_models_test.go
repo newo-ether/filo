@@ -6,46 +6,56 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
+
+	"github.com/newo-ether/filo/internal/protocol"
 )
 
-func TestModModelCatalogTracksOnlyLiveRegistrationSnapshots(t *testing.T) {
-	a := fixtureAdapter(t)
-	now := time.Unix(1000, 0)
-	a.now = func() time.Time { return now }
-	nonce := registerFixture(t, a, fixtureSession)
-	push := func(sequence uint64, options []string) {
-		t.Helper()
-		code, _ := bridgeCall(t, a, "push", envelope{SessionID: fixtureSession, Nonce: nonce, Sequence: sequence,
-			Events: []modEvent{{Kind: "snapshot", ModelOptions: options}}})
-		if code != http.StatusOK {
-			t.Fatal("catalog snapshot rejected", code)
-		}
-	}
-	push(1, []string{"default", "sonnet", "opus[1m]"})
-	models, err := a.Models(context.Background())
-	if err != nil || len(models) != 3 || models[1].ID != "sonnet" || len(models[1].ReasoningEfforts) != 5 || models[0].IsDefault {
-		t.Fatalf("catalog fabricated choices/default/effort: %+v %v", models, err)
-	}
-	models[0].ID = "client-write"
-	again, _ := a.Models(context.Background())
-	if again[0].ID != "default" {
-		t.Fatal("catalog leaked mutable state")
-	}
-	push(2, nil)
-	again, _ = a.Models(context.Background())
-	if len(again) != 0 {
-		t.Fatal("failed native catalog read retained old models")
-	}
-	push(3, []string{"haiku"})
-	now = now.Add(DefaultTTL)
-	again, _ = a.Models(context.Background())
-	if len(again) != 0 {
-		t.Fatal("expired registration retained native models")
+func TestModConfigAliasesNeverBecomeSelectableModels(t *testing.T) {
+	for _, origin := range []string{"terminal", "desktop"} {
+		t.Run(origin, func(t *testing.T) {
+			a := fixtureAdapter(t)
+			a.origin = origin
+			code, registered := bridgeCall(t, a, "register", registerRequest{SessionID: fixtureSession,
+				Instance: "model-catalog-fixture", Origin: origin})
+			if code != http.StatusOK {
+				t.Fatal("source registration refused", code)
+			}
+			nonce := registered.Nonce
+			yes := true
+			model, effort := "deepseek-v4-flash[1m]", "high"
+			code, _ = bridgeCall(t, a, "push", envelope{SessionID: fixtureSession, Nonce: nonce, Sequence: 1,
+				Events: []modEvent{{Kind: "snapshot", ModelOptions: []string{"default", "sonnet", "opus[1m]"},
+					Model: &model, Effort: &effort, CanSettings: &yes}}})
+			if code != http.StatusOK {
+				t.Fatal("config snapshot rejected", code)
+			}
+			models, err := a.Models(context.Background())
+			if err == nil || len(models) != 0 {
+				t.Fatalf("config aliases became a model catalog: %+v %v", models, err)
+			}
+			access, err := a.Access(context.Background(), fixtureSession)
+			if err != nil || access.Capabilities.Models || !reflect.DeepEqual(access.Capabilities.Settings, []string{"effort"}) {
+				t.Fatalf("alias removal lost request effort or retained model control: %+v %v", access, err)
+			}
+			page, err := a.Read(context.Background(), fixtureSession, "", false, nil)
+			if err != nil || page.Runtime.Model == nil || *page.Runtime.Model != model || !page.Runtime.Effort.Known || page.Runtime.Effort.Value == nil || *page.Runtime.Effort.Value != effort {
+				t.Fatal("catalog refusal lost actual native runtime readings", err)
+			}
+			ctx := protocol.WithAccessBinding(context.Background(), access.Binding)
+			for _, choice := range []string{"sonnet", model} {
+				if err := a.SetModel(ctx, fixtureSession, choice); err == nil {
+					t.Fatal("unresolved model choice admitted", choice)
+				}
+			}
+			_, pulled := bridgeCall(t, a, "pull", envelope{SessionID: fixtureSession, Nonce: nonce})
+			if len(pulled.Commands) != 0 || a.registrations[fixtureSession].settingsChange != nil {
+				t.Fatal("refused model selection queued a native mutation")
+			}
+		})
 	}
 }
 
-func TestModModelCatalogRejectsInvalidBatchAtomically(t *testing.T) {
+func TestModConfigAliasesRejectInvalidBatchAtomically(t *testing.T) {
 	for _, options := range [][]string{{"same", "same"}, {""}, {" spaced"}, {"bad\nmodel"}, {strings.Repeat("m", 257)}, make([]string, 33)} {
 		a := fixtureAdapter(t)
 		nonce := registerFixture(t, a, fixtureSession)
@@ -53,15 +63,11 @@ func TestModModelCatalogRejectsInvalidBatchAtomically(t *testing.T) {
 			Events: []modEvent{{Kind: "snapshot", ModelOptions: []string{"original"}}}})
 		code, _ := bridgeCall(t, a, "push", envelope{SessionID: fixtureSession, Nonce: nonce, Sequence: 2,
 			Events: []modEvent{{Kind: "start", TurnID: "must-not-start"}, {Kind: "snapshot", ModelOptions: options}}})
-		models, _ := a.Models(context.Background())
-		if code != http.StatusConflict || len(models) != 1 || models[0].ID != "original" || readRuntimeFixture(t, a).ActiveTurnID != nil {
-			t.Fatal("invalid catalog partially changed native state")
+		if code != http.StatusConflict || !reflect.DeepEqual(a.registrations[fixtureSession].modelOptions, []string{"original"}) || readRuntimeFixture(t, a).ActiveTurnID != nil {
+			t.Fatal("invalid config aliases partially changed native state")
 		}
 	}
 	if err := validateEvent(modEvent{Kind: "busy", ModelOptions: []string{"bad-placement"}}); err == nil {
-		t.Fatal("catalog accepted outside native snapshot")
-	}
-	if !reflect.DeepEqual(Capabilities().Settings, []string{"model", "effort"}) {
-		t.Fatal("catalog availability invented model mutation support")
+		t.Fatal("config aliases accepted outside native snapshot")
 	}
 }

@@ -74,12 +74,23 @@ func (v *adapterView) catalog(ctx context.Context, cursor string) (protocol.Sess
 	if err != nil {
 		return protocol.SessionPage{}, err
 	}
-	// Catalog rows never acquire a native owner or follower. Existing verified
-	// row identity is reused; an absent identity leaves this row read-only.
+	// Catalog projection uses row access or the source's catalog grant, never an
+	// execution access lookup. Without either, this row stays read-only.
 	for i := range page.Sessions {
 		row := &page.Sessions[i]
 		if !validSessionRef(row.ID) {
 			return protocol.SessionPage{}, errors.New("Invalid native session reference")
+		}
+		if row.Access == nil {
+			if provider, ok := v.Sessions.(interface {
+				CatalogAccess(context.Context, string) (protocol.SessionAccess, error)
+			}); ok {
+				access, readErr := provider.CatalogAccess(ctx, row.ID)
+				if readErr != nil {
+					return protocol.SessionPage{}, readErr
+				}
+				row.Access = &access
+			}
 		}
 		if row.Access != nil {
 			row.Access, err = v.projectAccess(row.ID, *row.Access)

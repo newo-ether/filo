@@ -156,6 +156,9 @@ func assembleUserSources(config map[string]any, directory, token string, changed
 			assembly.bridgeAddress = address
 			var surface SessionAPI = bridge
 			caps := claude.Capabilities()
+			if id == claudeDesktopSource {
+				caps = claude.DesktopCapabilities()
+			}
 			status := func() AdapterStatus {
 				value := bridge.Status()
 				return AdapterStatus{State: value.State, Error: value.Error}

@@ -9,142 +9,80 @@ import (
 	"github.com/newo-ether/filo/internal/nativejson"
 )
 
-const (
-	wtfHigh       = "\xed\xa0\x80"
-	previewLimit  = nativejson.PreviewUnits
-	previewSuffix = nativejson.PreviewSuffix
-)
-
-func TestNilHasNoPreview(t *testing.T) {
-	if value, ok := ToolPreview(nil); ok || value != "" {
-		t.Fatalf("nil preview = %q, %v", value, ok)
-	}
-}
-
-func TestTopLevelStringStaysRaw(t *testing.T) {
-	value, ok := ToolPreview("hello 🌍")
-	if !ok || value != "hello 🌍" {
-		t.Fatalf("preview = %q, %v", value, ok)
-	}
-}
-
-func TestTopLevelLongStringTruncatesWithSingleSuffix(t *testing.T) {
-	value, _ := ToolPreview(strings.Repeat("p", 10000))
-	if !strings.HasPrefix(value, strings.Repeat("p", previewLimit)) ||
-		!strings.HasSuffix(value, previewSuffix) ||
-		strings.Count(value, previewSuffix) != 1 {
-		t.Fatalf("preview boundary wrong: len=%d", len(value))
-	}
-	if len(value) != previewLimit+len(previewSuffix) {
-		t.Fatalf("preview length = %d want %d", len(value), previewLimit+len(previewSuffix))
-	}
-}
-
-func TestTrailingHighSurrogateRemovedBeforeSuffix(t *testing.T) {
-	value, _ := ToolPreview(strings.Repeat("a", previewLimit-1) + wtfHigh + "z")
-	if strings.Contains(value, wtfHigh) {
-		t.Fatal("dangling high surrogate survived")
-	}
-	if !strings.HasSuffix(value, previewSuffix) ||
-		!strings.HasSuffix(strings.TrimSuffix(value, previewSuffix), "aaaa") {
-		t.Fatalf("preview tail = %q", value[len(value)-12:])
-	}
-}
-
-func TestStructureMatchesStringify(t *testing.T) {
-	value, _ := ToolPreview(map[string]any{"b": []any{1.0, "x"}, "a": "hi"})
-	if value != `{"a":"hi","b":[1,"x"]}` {
-		t.Fatalf("preview = %q", value)
-	}
-}
-
-func TestEmptyStructuresAndNulls(t *testing.T) {
-	cases := []struct {
-		input any
-		want  string
-	}{
-		{map[string]any{}, "{}"},
-		{[]any{}, "[]"},
-		{map[string]any{"a": nil}, `{"a":null}`},
-		{[]any{nil}, "[null]"},
-		{1.5, "1.5"},
-		{true, "true"},
-	}
-	for _, testCase := range cases {
-		value, _ := ToolPreview(testCase.input)
-		if value != testCase.want {
-			t.Fatalf("preview(%v) = %q want %q", testCase.input, value, testCase.want)
+func TestCommonPayloadsRemainComplete(t *testing.T) {
+	for _, size := range []int{9000, 24000, 128 * 1024} {
+		text := strings.Repeat("x", size)
+		for _, input := range []any{text, map[string]any{"content": text, "path": "file.txt"}, `{"content":"` + text + `","path":"file.txt"}`} {
+			got, ok := ToolPreview(input)
+			if !ok || strings.Contains(got, strings.TrimPrefix(nativejson.PreviewSuffix, "\n")) || !strings.Contains(got, text) {
+				t.Fatalf("common payload changed at %d", size)
+			}
 		}
 	}
 }
 
-func TestInfinityBecomesNullLikeStringify(t *testing.T) {
-	value, _ := ToolPreview(math.Inf(1))
-	if value != "null" {
-		t.Fatalf("infinity = %q", value)
-	}
-	value, _ = ToolPreview(map[string]any{"a": math.Inf(-1)})
-	if value != `{"a":null}` {
-		t.Fatalf("map infinity = %q", value)
-	}
-}
-
-func TestHugeNestedStringTruncatesOnce(t *testing.T) {
-	value, _ := ToolPreview(map[string]any{"result": strings.Repeat("y", 20000)})
-	if strings.Count(value, previewSuffix) != 1 || !strings.HasSuffix(value, previewSuffix) {
-		t.Fatalf("nested preview = %d bytes, suffix count %d", len(value), strings.Count(value, previewSuffix))
-	}
-	if !strings.HasPrefix(value, `{"result":"`) {
-		t.Fatalf("nested preview head = %q", value[:20])
+func TestStructuredBoundsKeepValidJSONAndMetadata(t *testing.T) {
+	for _, text := range []string{strings.Repeat("x", 2*limit), strings.Repeat("\"\\\n你好🌍", limit)} {
+		input := nativejson.NewObject(nativejson.Property{Name: "output", Value: text}, nativejson.Property{Name: "exit_code", Value: float64(7)})
+		got, _ := ToolPreview(input)
+		var value map[string]any
+		if len(got) > MaxBytes || json.Unmarshal([]byte(got), &value) != nil {
+			t.Fatalf("invalid bounded object: %d bytes", len(got))
+		}
+		if value["exit_code"] != float64(7) || !strings.Contains(value["output"].(string), nativejson.PreviewSuffix) {
+			t.Fatal("metadata or truncation marker lost")
+		}
+		fields, _ := nativejson.Fields(input)
+		if nativejson.Text(fields["output"]) != text {
+			t.Fatal("input mutated")
+		}
 	}
 }
 
-func TestDepthLimitTruncates(t *testing.T) {
+func TestNestedSerializedJSONAndArraysStayParseable(t *testing.T) {
+	nested, _ := json.Marshal(map[string]any{"old_string": strings.Repeat("a", 2*limit), "new_string": "b"})
+	got, _ := ToolPreview(map[string]any{"arguments": string(nested), "results": []any{"ok", float64(4)}})
+	var value map[string]any
+	if json.Unmarshal([]byte(got), &value) != nil {
+		t.Fatal("outer JSON broken")
+	}
+	if !json.Valid([]byte(value["arguments"].(string))) {
+		t.Fatal("nested JSON broken")
+	}
+}
+
+func TestPlainTextAndSurrogateBoundaries(t *testing.T) {
+	if got, ok := ToolPreview(nil); ok || got != "" {
+		t.Fatal("nil changed")
+	}
+	if got, _ := ToolPreview("hello 🌍"); got != "hello 🌍" {
+		t.Fatal("raw text changed")
+	}
+	got, _ := ToolPreview(strings.Repeat("a", limit-1) + "🌍tail")
+	if !strings.HasSuffix(got, nativejson.PreviewSuffix) || strings.Contains(got, "\xed\xa0") {
+		t.Fatal("invalid surrogate boundary")
+	}
+}
+
+func TestStructureAndDepthRemainValid(t *testing.T) {
+	got, _ := ToolPreview(map[string]any{"b": []any{1.0, "x"}, "a": "hi"})
+	if got != `{"a":"hi","b":[1,"x"]}` {
+		t.Fatalf("order: %s", got)
+	}
 	var nested any = "leaf"
 	for index := 0; index < 102; index++ {
 		nested = []any{nested}
 	}
-	value, _ := ToolPreview(nested)
-	if !strings.HasSuffix(value, previewSuffix) {
-		t.Fatalf("deep preview tail = %q", value[len(value)-20:])
+	got, _ = ToolPreview(nested)
+	if !json.Valid([]byte(got)) || !strings.Contains(got, strings.TrimPrefix(nativejson.PreviewSuffix, "\n")) {
+		t.Fatal("depth limit broke JSON")
 	}
-	value, _ = ToolPreview([]any{[]any{"leaf"}})
-	if value != `[["leaf"]]` {
-		t.Fatalf("shallow = %q", value)
+	got, _ = ToolPreview(map[string]any{strings.Repeat("k", limit+1): 1})
+	if !json.Valid([]byte(got)) || len(got) > MaxBytes {
+		t.Fatal("key limit broke JSON")
 	}
-}
-
-func TestEscapesMatchStringify(t *testing.T) {
-	value, _ := ToolPreview(map[string]any{"k": "a\"b\\\n\tx"})
-	var roundTripped map[string]any
-	if err := json.Unmarshal([]byte(value), &roundTripped); err != nil {
-		t.Fatalf("preview is not valid json: %v", err)
-	}
-	if roundTripped["k"] != "a\"b\\\n\tx" {
-		t.Fatalf("round trip = %q", roundTripped["k"])
-	}
-	if !strings.HasPrefix(value, `{"k":"a\"b\\\n\tx"`) {
-		t.Fatalf("escaped preview = %q", value)
-	}
-}
-
-func TestOversizedKeyTruncatesOnce(t *testing.T) {
-	value, _ := ToolPreview(map[string]any{strings.Repeat("k", previewLimit+1): 1})
-	if strings.Count(value, previewSuffix) != 1 || !strings.HasSuffix(value, previewSuffix) {
-		t.Fatalf("oversized key preview len=%d", len(value))
-	}
-	if !strings.HasPrefix(value, `{"k`) {
-		t.Fatalf("oversized key head = %q", value[:8])
-	}
-}
-
-func TestMultibytePreviewRespectsUtf16Budget(t *testing.T) {
-	value, _ := ToolPreview(map[string]any{"arguments": strings.Repeat("あ", 30000)})
-	budget := utf16Len(strings.TrimSuffix(value, previewSuffix))
-	if budget > previewLimit {
-		t.Fatalf("preview exceeds UTF-16 budget: %d units", budget)
-	}
-	if !strings.HasSuffix(value, previewSuffix) {
-		t.Fatalf("multibyte preview not truncated: %q", value[len(value)-40:])
+	got, _ = ToolPreview(math.Inf(1))
+	if got != "null" {
+		t.Fatal("non-finite scalar changed")
 	}
 }

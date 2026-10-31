@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/newo-ether/filo/internal/protocol"
+	"github.com/newo-ether/filo/internal/toolpreview"
 )
 
 type nativeFixture struct {
@@ -148,12 +149,12 @@ func TestIndexedHistoryReadsBoundedChunksAndPreservesAllMessageOrder(t *testing.
 			t.Fatal("Unbounded item page")
 		}
 		for _, message := range page.Messages {
-			if message.Activity == nil || len(message.Activity.Result.Value) > 8300 {
+			if message.Activity == nil || !message.Activity.Result.Known || len(message.Activity.Result.Value) > toolpreview.MaxBytes || !json.Valid([]byte(message.Activity.Result.Value)) {
 				t.Fatal("Unbounded preview")
 			}
 		}
 		wire, err := json.Marshal(page)
-		if err != nil || len(wire) > 256*1024 {
+		if err != nil || len(wire) > 16*(toolpreview.MaxBytes+4096) {
 			t.Fatal("Unbounded wire page", len(wire), err)
 		}
 		ids = append(messageIDs(page.Messages), ids...)

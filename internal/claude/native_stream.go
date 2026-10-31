@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/newo-ether/filo/internal/protocol"
+	"github.com/newo-ether/filo/internal/toolpreview"
 )
 
 // stream_event UUIDs identify notifications, not assistant messages. Display row
@@ -144,7 +145,8 @@ func (s *NativeSession) newNativeBlock(messageID string, index int, content nati
 		text = ""
 		activity = &protocol.Activity{Type: "tool", ToolName: content.Name, State: "running"}
 		if len(content.Input) > 0 {
-			activity.Arguments = protocol.Known(protocol.Text(content.Input))
+			text, _ := toolpreview.ToolPreview(string(content.Input))
+			activity.Arguments = protocol.Known(protocol.Text(text))
 		}
 	default:
 		return nil, protocol.Message{}
@@ -256,7 +258,8 @@ func (s *NativeSession) toolResults(event map[string]json.RawMessage) {
 			row.Activity.State = "failed"
 		}
 		if len(content.Content) > 0 {
-			row.Activity.Result = protocol.Known(protocol.Text(content.Content))
+			text, _ := toolpreview.ToolPreview(string(content.Content))
+			row.Activity.Result = protocol.Known(protocol.Text(text))
 		}
 		s.putNativeRow(row)
 	}

@@ -3,15 +3,14 @@ package claude
 import (
 	"context"
 	"errors"
-	"sort"
 	"strings"
 	"unicode"
 
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
-// Only the engine's bounded model row is admitted. Other config rows, including
-// plugin rows, never become a catalog or an invented effort list.
+// Config choices are aliases, not provider-ready model IDs. Validate snapshots
+// without treating those choices as an externally selectable model catalog.
 func validateModelOptions(options []string) error {
 	if len(options) > 32 {
 		return errors.New("Claude native model catalog exceeds bound")
@@ -34,23 +33,7 @@ func (a *Adapter) Models(ctx context.Context) ([]protocol.Model, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.pruneLocked()
-	ids := make([]string, 0, len(a.registrations))
-	for id := range a.registrations {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	seen := map[string]bool{}
-	models := []protocol.Model{}
-	for _, id := range ids {
-		for _, option := range a.registrations[id].modelOptions {
-			if !seen[option] {
-				seen[option] = true
-				models = append(models, protocol.Model{ID: option, Name: protocol.Text(option), ReasoningEfforts: []string{"low", "medium", "high", "xhigh", "max"}})
-			}
-		}
-	}
-	return models, nil
+	// The public Mod API exposes neither the Desktop bootstrap catalog nor a
+	// read-only alias resolver. Never substitute another source's catalog.
+	return nil, unsupported("model catalog")
 }

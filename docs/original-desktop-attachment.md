@@ -27,6 +27,21 @@ APIs. Installation does not require a separate CLI or a PATH `codex` command. Re
 the runtime dynamically; a tested version or native hash is diagnostic information,
 not a production allowlist.
 
+Codex Desktop catalog rows expose native rename and archive separately from
+execution control. Their account/store and exact-row binding is revalidated before
+dispatch; it cannot start a turn, change settings or stop execution. Rename uses
+`thread/name/set` with a native readback. Archive uses `thread/archive` and then
+publishes the supported Desktop `thread-archived` notification after native success.
+
+New-thread sidebar visibility has a separate native boundary. In the inspected
+Desktop build, a local thread catalog observes its own app-server notifications and
+startup reconciliation. The external IPC method table exposes neither thread
+creation nor local-catalog refresh. Creating through another bundled-runtime host
+therefore does not prove immediate sidebar visibility. Filo must not fake an
+unarchive event, inject a renderer notification or modify the catalog database to
+claim this behavior. Immediate visibility remains unqualified until a supported
+native entry point is verified.
+
 Auxiliary metadata operations and original desktop execution have separate lifetimes.
 A successful native `thread/start` response alone does not prove that a new task is
 durable, resumable, or ready for a first turn in the original desktop. The current

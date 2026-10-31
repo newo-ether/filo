@@ -379,7 +379,7 @@ func TestTurnErrorSlicesByUtf16Units(t *testing.T) {
 }
 
 func TestProjectMessagesTruncatesOversizedActivityPreview(t *testing.T) {
-	huge := strings.Repeat("x", 9000)
+	huge := strings.Repeat("x", 512*1024)
 	turns := []NativeTurn{{ID: "t", Items: []map[string]any{
 		{"type": "commandExecution", "command": huge, "status": "completed"},
 	}}}
@@ -389,7 +389,7 @@ func TestProjectMessagesTruncatesOversizedActivityPreview(t *testing.T) {
 	if !strings.HasPrefix(args, "{\"command\":\"xxxx") || !strings.Contains(args, "Filo preview truncated") {
 		t.Fatalf("preview budget not applied: %d chars", len(args))
 	}
-	if len([]rune(args)) > 8300 {
+	if len(args) > 384*1024 || !json.Valid([]byte(args)) {
 		t.Fatalf("preview far beyond budget: %d", len(args))
 	}
 }

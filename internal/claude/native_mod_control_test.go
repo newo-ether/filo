@@ -44,7 +44,7 @@ func TestOfficialModNativeStopBridge(t *testing.T) {
 		defer diagnosticMu.Unlock()
 		t.Logf("fixture bridge request counts=%v", requests)
 	}()
-	for _, relative := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js"} {
+	for _, relative := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/desktop.mjs"} {
 		data, err := os.ReadFile(filepath.Join("mod", filepath.FromSlash(relative)))
 		if err != nil {
 			t.Fatal(err)

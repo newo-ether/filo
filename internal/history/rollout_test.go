@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/newo-ether/filo/internal/protocol"
+	"github.com/newo-ether/filo/internal/toolpreview"
 )
 
 func rolloutFixture(t *testing.T, count int) (string, func(int, any) string) {
@@ -124,8 +125,12 @@ func TestRolloutSkipsHiddenPayloadsAndDeduplicatesCompletedNativeItems(t *testin
 		t.Fatal(page.Messages)
 	}
 	encoded, err := json.Marshal(page.Messages)
-	if err != nil || len(encoded) > 20000 || strings.Contains(string(encoded), "private") {
+	if err != nil || len(encoded) > toolpreview.MaxBytes+4096 || strings.Contains(string(encoded), "private") || strings.Contains(string(encoded), strings.Repeat("x", 100)) {
 		t.Fatalf("Unbounded/private projection: %d %v", len(encoded), err)
+	}
+	result := page.Messages[0].Activity.Result.Value
+	if !json.Valid([]byte(result)) || !strings.Contains(string(result), strings.Repeat("visible ", 20000)) {
+		t.Fatal("Visible tool content was clipped or invalid JSON")
 	}
 	excluded, err := ReadRolloutPage(context.Background(), path, "task", "", "item-0", true, []string{"new-turn"}, "")
 	if err != nil || len(excluded.Messages) != 0 || excluded.NextCursor == nil || *excluded.NextCursor != IndexedHistoryCursor {

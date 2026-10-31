@@ -141,8 +141,8 @@ func TestHugeNativeTurnPagesWithinByteLimits(t *testing.T) {
 				t.Fatalf("groupId = %q, want remote-group:turn:m0", message.GroupID)
 			}
 			if message.Activity == nil ||
-				!strings.Contains(string(message.Activity.Result.Value), "Filo preview truncated") {
-				t.Fatalf("activity result was not bounded: %+v", message.Activity)
+				string(message.Activity.Result.Value) != string(messages[1].Activity.Result.Value) {
+				t.Fatal("common tool output was changed")
 			}
 		}
 		ids = append(messageIDs(page.Messages), ids...)
@@ -321,7 +321,7 @@ func TestSingleHugeUnicodeMessageStaysEnterable(t *testing.T) {
 				t.Fatalf("part %q splits a surrogate pair", part.ID)
 			}
 		}
-		if pages++; pages == 2 {
+		if pages++; pages == 1 {
 			revisit = page.PageCursor.Value
 			revisitIDs = messageIDs(page.Messages)
 		}

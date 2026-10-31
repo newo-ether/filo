@@ -85,16 +85,13 @@ func TestProperPairsDecodeAndLoneLowSurrogateStays(t *testing.T) {
 	}
 }
 
-func TestPreviewSuffixAppearsOncePerSharedField(t *testing.T) {
+func TestToolStringsReachDecodedPreviewIntact(t *testing.T) {
 	items := itemsOf(t, stateValue(t, `{"id":"t","type":"mcpToolCall","result":{"content":[{"type":"text","text":"`+
-		strings.Repeat("p", 9000)+`"},{"type":"text","text":"`+strings.Repeat("q", 100)+`"}]}}`))
+		strings.Repeat("p", PreviewUnits+100)+`"},{"type":"text","text":"`+strings.Repeat("q", 100)+`"}]}}`))
 	content := arr(t, obj(t, obj(t, items[0])["result"])["content"])
 	first := Text(obj(t, content[0])["text"])
 	second := Text(obj(t, content[1])["text"])
-	if strings.Count(first, PreviewSuffix) != 1 {
-		t.Fatalf("first preview suffix count %d", strings.Count(first, PreviewSuffix))
-	}
-	if second != "" {
-		t.Fatalf("exhausted budget retained %q", second)
+	if first != strings.Repeat("p", PreviewUnits+100) || second != strings.Repeat("q", 100) {
+		t.Fatal("native tool values were cut before decoded-field preview")
 	}
 }

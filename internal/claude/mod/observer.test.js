@@ -13,6 +13,11 @@ for (const surface of ['terminal', 'desktop']) {
     })
     const token = 'b'.repeat(64)
     const requests = []
+    let toolReads = 0, toolCalls = 0
+    on('tool.list', () => { toolReads += 1; return { value: [
+      { name: 'mcp__ccd_session_mgmt__get_session', description: 'Untrusted name fixture', mcp: true },
+    ] } })
+    on('tool.call', { tool: 'mcp__ccd_session_mgmt__get_session' }, () => { toolCalls += 1; return { deny: 'must not execute' } })
     let finishPush
     const pushed = new Promise(resolve => { finishPush = resolve })
     on('fs.stat', ($, e) => ({ value: {
@@ -49,10 +54,16 @@ for (const surface of ['terminal', 'desktop']) {
     expect(requests.map(request => request.action)).toEqual(['register', 'pull', 'push'])
     expect(requests[0].body.origin).toBe(surface)
     expect(requests[0].body.sessionId).toBe(sessionId)
-    expect(requests[2].body.events).toEqual([
+    const events = requests[2].body.events
+    expect(events.filter(event => event.kind !== 'discovery')).toEqual([
       { kind: 'busy' },
       { kind: 'snapshot', canStop: true, canInput: true, canSettings: true, model: 'native-model', contextTokens: 12, contextWindow: 100 },
     ])
+    expect(toolCalls).toBe(0)
+    expect(toolReads).toBe(surface === 'desktop' ? 1 : 0)
+    expect(events.filter(event => event.kind === 'discovery')).toEqual(surface === 'desktop' ? [
+      { kind: 'discovery', discovery: { status: 'unverified', tools: ['mcp__ccd_session_mgmt__get_session'] } },
+    ] : [])
     await $.session.end({ sessionId, reason: 'prompt_input_exit', resume: { sessionId } })
     expect(requests.at(-1).action).toBe('revoke')
     expect(requests.at(-1).body.sessionId).toBe(sessionId)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/newo-ether/filo/internal/codex"
 	"github.com/newo-ether/filo/internal/history"
+	"github.com/newo-ether/filo/internal/nativejson"
 	"github.com/newo-ether/filo/internal/protocol"
 )
 
@@ -155,7 +156,7 @@ func serveStandalone(options standaloneOptions, latch *exitLatch, gateway *stand
 	var surface *TaskSessions
 	var usage func(context.Context) (protocol.AccountUsage, error)
 	if desktopEnabled {
-		connection, err = codex.ConnectCodexHost(context.Background(), appServerURL, codex.HostOptions{})
+		connection, err = codex.ConnectCodexHost(context.Background(), appServerURL, codex.HostOptions{PacketLimit: nativejson.MaxRetainedBytes})
 		if err != nil {
 			return err
 		}
@@ -177,7 +178,7 @@ func serveStandalone(options standaloneOptions, latch *exitLatch, gateway *stand
 			home = nativeHome(sid)
 		}
 		surface = NewTaskSessions(metadata,
-			history.NewNativeHistory(home), factory)
+			history.NewNativeHistory(home, nativeHistoryReader(connection)), factory)
 		gateway.setSessions(surface)
 		usage = func(context.Context) (protocol.AccountUsage, error) { return metadata.Usage() }
 		if sid != "" {

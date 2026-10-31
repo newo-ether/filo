@@ -44,6 +44,50 @@ func TestNativeTitleMetadataIdentityRenameAndFailureIsolation(t *testing.T) {
 	}
 }
 
+func TestNativeTranscriptGeneratedTitleAndExplicitRename(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", home)
+	dir := filepath.Join(home, "projects", "fixture")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, fixtureSession+".jsonl")
+	write := func(rows string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(rows), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	generated := `{"type":"ai-title","sessionId":"` + fixtureSession + `","aiTitle":"Native automatic title"}` + "\n"
+	write(generated)
+	a := fixtureAdapter(t)
+	registerFixture(t, a, fixtureSession)
+	a.mu.Lock()
+	a.registrations[fixtureSession].transcript = path
+	a.mu.Unlock()
+	page, err := a.Read(context.Background(), fixtureSession, "", true, nil)
+	if err != nil || page.Runtime.Title == nil || *page.Runtime.Title != "Native automatic title" {
+		t.Fatal("generated title missing from conversation", page.Runtime, err)
+	}
+	custom := `{"type":"custom-title","sessionId":"` + fixtureSession + `","customTitle":"Personal rename"}` + "\n"
+	wrong := `{"type":"ai-title","sessionId":"20000000-0000-4000-8000-000000000002","aiTitle":"Wrong session"}` + "\n"
+	for _, rows := range []string{generated + custom, custom + generated + wrong} {
+		write(rows)
+		listed, err := a.List(context.Background(), "")
+		if err != nil || len(listed.Sessions) != 1 || listed.Sessions[0].Title != "Personal rename" {
+			t.Fatal("explicit native title must win over generated title", listed, err)
+		}
+	}
+	write(wrong)
+	if title := transcriptTitle(path, fixtureSession); title != nil {
+		t.Fatal("generated title crossed session identity", title)
+	}
+	write(`{"type":"ai-title","sessionId":"` + fixtureSession + `","aiTitle":"` + strings.Repeat("x", 4097) + `"}` + "\n")
+	if title := transcriptTitle(path, fixtureSession); title != nil {
+		t.Fatal("oversize generated title admitted", title)
+	}
+}
+
 func TestNativeTranscriptTitleReadsOnlyScopedBoundedRecords(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", home)

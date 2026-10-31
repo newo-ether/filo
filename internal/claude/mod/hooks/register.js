@@ -1,7 +1,9 @@
 // Filo official Claude Code Mod. No Node.js, npm or external runtime.
+import { desktopMetadata, desktopRename } from './desktop.mjs'
 // API evidence: https://code.claude.com/docs/en/plugins/mods/reference
 const MAX_EVENTS = 96
-const MAX_QUEUE_CHARS = 128 * 1024
+const MAX_QUEUE_CHARS = 8 * 1024 * 1024
+const MAX_TOOL_BYTES = 384 * 1024
 const MAX_TEXT_BYTES = 24 * 1024
 const BRIDGE_TIMEOUT_MS = 750
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -81,10 +83,11 @@ async function post($, state, action, payload) {
   }
 }
 
-function clearLocal(state) {
+function clearLocal(state, keepMetadata = false) {
   state.generation += 1
   state.binding = undefined
   state.bindingOrigin = undefined
+  state.discoveryAttempt = undefined
   state.sequence = 0
   state.queue = []
   state.queueChars = 0
@@ -102,6 +105,7 @@ function clearLocal(state) {
   state.toolBlocks = new Map()
   state.inflight = 0
   state.pendingMetadata = undefined
+  if (!keepMetadata) state.knownMetadata = undefined
 }
 
 function enqueue(state, event) {
@@ -191,11 +195,12 @@ async function registerSession($, state, nativeID, origin) {
     state.observedStep = undefined
   }
   state.pendingStart = undefined
-  if (state.pendingMetadata?.session_id === nativeID) {
-    const metadata = state.pendingMetadata
-    state.pendingMetadata = undefined
-    void observeNativeTitle($, state, metadata, state.binding, state.generation).catch(() => {})
-  }
+  const known = state.knownMetadata?.session_id === nativeID && state.knownMetadata.origin === origin ? state.knownMetadata : undefined
+  const pending = state.pendingMetadata?.session_id === nativeID ? state.pendingMetadata : undefined
+  state.pendingMetadata = undefined
+  state.knownMetadata = known
+  if (known || pending)
+    void observeNativeTitle($, state, { ...known, ...pending }, state.binding, state.generation).catch(() => {})
 }
 
 function modelOptions(rows) {
@@ -231,6 +236,45 @@ async function observeRuntime($, state, current, stamp) {
   enqueue(state, snapshot)
 }
 
+const DESKTOP_TOOL_NAMES = new Set([
+  'list_sessions', 'get_session', 'list_events', 'set_session_title', 'archive_session', 'unarchive_session',
+  'send_message', 'stop_session', 'set_session_model', 'set_session_effort', 'start_session', 'delete_session',
+].map(name => 'mcp__ccd_session_mgmt__' + name))
+
+async function observeDesktopTools($, state, current, stamp) {
+  if (state.bindingOrigin !== 'desktop' || state.discoveryAttempt === current || state.discoveryPending) return
+  state.discoveryAttempt = current
+  let timer, status = 'unavailable', tools = []
+  try {
+    const deadline = new Promise((resolve, reject) => {
+      timer = $.clock.after(BRIDGE_TIMEOUT_MS, () => reject(new Error('discovery timeout')))
+    })
+    state.discoveryPending = true
+    let read
+    try { read = $.tool.list() } catch (error) { state.discoveryPending = false; throw error }
+    // A timed-out physical read remains the only read, even across registrations.
+    const rows = await Promise.race([deadline, Promise.resolve(read).then(
+      value => { state.discoveryPending = false; return value },
+      error => { state.discoveryPending = false; throw error },
+    )])
+    status = 'invalid'
+    if (Array.isArray(rows) && rows.length <= 512 && rows.every(row => row && typeof row.name === 'string' &&
+        row.name.length <= 256 && typeof row.mcp === 'boolean')) {
+      tools = rows.filter(row => row.mcp && DESKTOP_TOOL_NAMES.has(row.name)).map(row => row.name).sort()
+      if (new Set(tools).size === tools.length) status = 'unverified'
+      else tools = []
+    }
+  } catch (error) {
+    if (error instanceof TypeError) return // Older hosts may lack the list method.
+    if (String(error) === 'Error: discovery timeout') status = 'timeout'
+  } finally {
+    try { timer?.cancel() } catch {}
+  }
+  // Names and caller-supplied tool arguments cannot establish SDK provenance.
+  if (await matchesBinding($, state, current, stamp))
+    enqueue(state, { kind: 'discovery', discovery: { status, tools } })
+}
+
 function inputRefusal(error) {
   const message = String(error)
   if (message.includes('$.session.append: refused: main is a conversation no plugin may shape')) return 'append_read_only'
@@ -246,13 +290,22 @@ async function executeControl($, state, current, stamp, commands) {
   for (const command of commands) {
     if (!await matchesBinding($, state, current, stamp)) return
     if (typeof command.id !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(command.id) ||
-        !['stop', 'send', 'settings'].includes(command.operation)) throw new Error('Invalid native control')
+        !['stop', 'send', 'settings', 'desktop-metadata', 'desktop-rename'].includes(command.operation)) throw new Error('Invalid native control')
     // Mark before invoking. Neither bridge retries nor lifecycle changes replay it.
     if (state.commandID === command.id) continue
     state.commandID = command.id
     let ok = false
-    let refusal
-    if (command.operation === 'stop') {
+    let refusal, metadata, rename
+    if (command.operation === 'desktop-metadata' || command.operation === 'desktop-rename') {
+      const renaming = command.operation === 'desktop-rename'
+      if (Object.keys(command).some(key => key !== 'id' && key !== 'operation' && key !== 'hostSessionId' && !(renaming && key === 'title')))
+        throw new Error('Invalid Desktop diagnostic')
+      if (state.bindingOrigin !== 'desktop') return
+      const identity = { ...current, hostSessionId: command.hostSessionId }
+      if (renaming) rename = await desktopRename($, state, identity, command.title, () => matchesBinding($, state, current, stamp))
+      else metadata = await desktopMetadata($, state, identity)
+      ok = renaming ? rename.status === 'applied' : metadata.status === 'matched'
+    } else if (command.operation === 'stop') {
       if (typeof command.turnId !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(command.turnId)) throw new Error('Invalid turn')
       if (state.activeTurn === command.turnId) {
         try { await $.turn.abort({ turnId: command.turnId }); ok = true } catch {}
@@ -263,7 +316,8 @@ async function executeControl($, state, current, stamp, commands) {
           settings.model !== undefined && (typeof settings.model !== 'string' || !settings.model.length || settings.model.length > 256) ||
           settings.effort !== undefined && !['low', 'medium', 'high', 'xhigh', 'max'].includes(settings.effort)) throw new Error('Invalid settings')
       // Apply session-local settings from the next main turn; never write native config.
-      state.nextSettings = { ...state.nextSettings, ...settings, afterTurn: state.activeTurn, id: command.id }
+      state.nextSettings = { ...state.nextSettings, ...settings,
+        afterTurn: state.nativeStart?.turnId ?? state.activeTurn, id: command.id }
       ok = true
     } else {
       if (typeof command.text !== 'string' || !command.text.length || new TextEncoder().encode(command.text).length > MAX_TEXT_BYTES ||
@@ -283,17 +337,28 @@ async function executeControl($, state, current, stamp, commands) {
       if (!ok) state.inputObservation = undefined
     }
     if (!await matchesBinding($, state, current, stamp)) return
-    await post($, state, 'result', { ...current, result: { id: command.id, ok, ...(refusal ? { refusal } : {}) } })
+    await post($, state, 'result', { ...current, result: { id: command.id, ok, ...(metadata ? { metadata } : {}), ...(rename ? { rename } : {}), ...(refusal ? { refusal } : {}) } })
   }
 }
 
 async function pump($, state) {
   if (state.pumping || state.terminal || !state.config) return
   state.pumping = true
+  let generation = state.generation
   try {
     const origin = await selectedOrigin($, state)
     const nativeID = await $.session.id()
-    if (state.binding && (state.binding.sessionId !== nativeID || state.bindingOrigin !== origin)) await revoke($, state)
+    if (generation !== state.generation || state.terminal) return
+    if (state.knownMetadata && (state.knownMetadata.session_id !== nativeID || state.knownMetadata.origin !== origin))
+      state.knownMetadata = undefined
+    if (state.binding && (state.binding.sessionId !== nativeID || state.bindingOrigin !== origin)) {
+      // revoke clears synchronously. Own exactly that generation increment;
+      // external lifecycle changes during the await must stop this pump.
+      const revokedGeneration = generation + 1
+      await revoke($, state)
+      if (state.generation !== revokedGeneration || state.terminal) return
+      generation = revokedGeneration
+    }
     if (!origin || !UUID.test(nativeID) || nativeID === state.endedSession) return
     state.endedSession = undefined
     if (!state.binding) await registerSession($, state, nativeID, origin)
@@ -302,6 +367,7 @@ async function pump($, state) {
     const stamp = state.generation
     // Revalidate session identity and current surface across asynchronous work.
     if (!await matchesBinding($, state, current, stamp)) return
+    void observeDesktopTools($, state, current, stamp).catch(() => {})
     const pulled = await post($, state, 'pull', current)
     if (!await matchesBinding($, state, current, stamp)) return
     await executeControl($, state, current, stamp, pulled.commands)
@@ -321,7 +387,7 @@ async function pump($, state) {
     const batch = []
     for (const event of state.queue) {
       const size = new TextEncoder().encode(JSON.stringify(event)).length
-      if (batch.length === 24 || bytes + size > 48 * 1024) break
+      if (batch.length === 24 || bytes + size > 3 * 1024 * 1024) break
       batch.push(event)
       bytes += size
     }
@@ -334,8 +400,9 @@ async function pump($, state) {
     state.queueChars = state.queue.reduce((sum, e) => sum + JSON.stringify(e).length, 0)
   } catch {
     // Never replay native control after an uncertain response. Observation
-    // reconnects with a fresh binding and no pending commands.
-    clearLocal(state)
+    // reconnects with a fresh binding and no pending commands. Only bounded
+    // classic metadata survives transport loss; native lifecycle clears it.
+    if (generation === state.generation) clearLocal(state, true)
   } finally { state.inflight = 0; state.pumping = false }
 }
 
@@ -468,6 +535,44 @@ function boundedObservation(state, text) {
   return value
 }
 
+function boundedTool(state, value, depth = 0) {
+  const suffix = '\n[Filo preview truncated; full output remains in Claude.]'
+  const encode = value => JSON.stringify(value)
+  const bound = (value, budget, level) => {
+    if (level > 64) { state.truncated = true; return suffix }
+    if (typeof value === 'string') {
+      if (new TextEncoder().encode(value).length <= budget) return value
+      try { return encode(bound(JSON.parse(value), budget, level + 1)) } catch {}
+      state.truncated = true
+      let end = Math.min(value.length, budget)
+      while (new TextEncoder().encode(value.slice(0, end)).length > budget) end -= 256
+      if (end > 0 && /[\uD800-\uDBFF]/.test(value[end - 1])) end--
+      return value.slice(0, Math.max(0, end)) + suffix
+    }
+    if (Array.isArray(value)) {
+      const result = value.slice(0, 4096).map(item => bound(item, budget, level + 1))
+      if (value.length > 4096) { state.truncated = true; result.push(suffix) }
+      return result
+    }
+    if (value && typeof value === 'object') {
+      const entries = Object.entries(value)
+      const result = Object.fromEntries(entries.slice(0, 4096).map(([key, item]) => [key, bound(item, budget, level + 1)]))
+      if (entries.length > 4096) { state.truncated = true; result._filo_truncated = suffix }
+      return result
+    }
+    return value
+  }
+  // Parse complete serialized values before reducing any leaf string.
+  if (typeof value === 'string') { try { value = JSON.parse(value) } catch {} }
+  for (let budget = 256 * 1024; budget >= 1; budget = Math.floor(budget / 2)) {
+    const reduced = bound(value, budget, depth)
+    const text = typeof reduced === 'string' ? reduced : encode(reduced)
+    if (typeof text === 'string' && new TextEncoder().encode(text).length <= MAX_TOOL_BYTES) return text
+  }
+  state.truncated = true
+  return encode({ _filo_truncated: suffix })
+}
+
 function observeChunk(state, e, chunk, current, stamp, blocks) {
   if (!current || current !== state.binding || stamp !== state.generation || state.terminal || e.agentId ||
       state.activeTurn !== e.turnId || !Number.isSafeInteger(e.index) || e.index < 0 || e.index > 1000000 ||
@@ -487,27 +592,40 @@ function observeChunk(state, e, chunk, current, stamp, blocks) {
   if ((chunk.kind === 'text' || chunk.kind === 'thinking') && typeof chunk.text === 'string')
     block.text = boundedObservation(state, (block.text ?? '') + chunk.text)
   if (chunk.kind === 'input' && block.type === 'tool' && typeof chunk.json === 'string')
-    block.arguments = boundedObservation(state, (block.arguments ?? '') + chunk.json)
-  const event = { kind: 'block', turnId: e.turnId, block: { ...block } }
+    {
+      const input = (block.arguments ?? '') + chunk.json
+      if (new TextEncoder().encode(input).length <= MAX_TOOL_BYTES) block.arguments = input
+      else { delete block.arguments; block.inputOverflow = true; state.truncated = true }
+    }
+  if (block.inputOverflow) delete block.arguments
+  const { inputOverflow, ...wireBlock } = block
+  const event = { kind: 'block', turnId: e.turnId, block: wireBlock }
   if (block.type === 'tool') {
     if (state.toolBlocks.size >= 128 && !state.toolBlocks.has(block.nativeId)) state.toolBlocks.delete(state.toolBlocks.keys().next().value)
-    state.toolBlocks.set(block.nativeId, { ...event, block: { ...block } })
+    state.toolBlocks.set(block.nativeId, { ...event, block: { ...wireBlock } })
   }
   if (enqueue(state, event) && block.type === 'text') state.streamProjection = true
 }
 
 async function observeNativeTitle($, state, e, current, stamp) {
+  if (stamp !== state.generation || state.terminal || !UUID.test(e.session_id ?? '')) return
+  const metadata = { session_id: e.session_id }
+  if (localAbsolutePath(e.transcript_path) && e.transcript_path.replace(/\\/g, '/').endsWith('/' + e.session_id + '.jsonl'))
+    metadata.transcript_path = e.transcript_path
+  if (typeof e.session_title === 'string' && new TextEncoder().encode(e.session_title).length <= 4096)
+    metadata.session_title = e.session_title
+  if (metadata.transcript_path === undefined && metadata.session_title === undefined) return
   if (!current) {
-    if (UUID.test(e.session_id ?? '') && (typeof e.session_title === 'string' || localAbsolutePath(e.transcript_path)))
-      state.pendingMetadata = { session_id: e.session_id, session_title: typeof e.session_title === 'string' ? e.session_title.slice(0, 4096) : undefined,
-        transcript_path: localAbsolutePath(e.transcript_path) ? e.transcript_path : undefined }
+    state.pendingMetadata = metadata
     return
   }
-  if (e.session_id !== current.sessionId || !await matchesBinding($, state, current, stamp)) return
-  if (localAbsolutePath(e.transcript_path) && e.transcript_path.replace(/\\/g, '/').endsWith('/' + current.sessionId + '.jsonl'))
-    enqueue(state, { kind: 'metadata', transcriptPath: e.transcript_path })
-  if (typeof e.session_title === 'string' && new TextEncoder().encode(e.session_title).length <= 4096)
-    enqueue(state, { kind: 'title', title: e.session_title })
+  if (metadata.session_id !== current.sessionId || !await matchesBinding($, state, current, stamp)) return
+  const known = state.knownMetadata?.session_id === current.sessionId && state.knownMetadata.origin === state.bindingOrigin ? state.knownMetadata : undefined
+  state.knownMetadata = { ...known, ...metadata, origin: state.bindingOrigin }
+  if (metadata.transcript_path !== undefined)
+    enqueue(state, { kind: 'metadata', transcriptPath: metadata.transcript_path })
+  if (metadata.session_title !== undefined)
+    enqueue(state, { kind: 'title', title: metadata.session_title })
 }
 
 export function register(on) {
@@ -559,11 +677,13 @@ export function register(on) {
       stamp = state.generation
       revision = state.turnRevision
       selected = state.nextSettings
-      if (!e.agentId && current && state.activeTurn === e.turnId) state.streamProjection = false
-      // Only previously authenticated phone settings can rewrite this request.
-      // Lifecycle changes revoke them synchronously. Never await observation here.
-      if (!e.agentId && current && state.config && !state.terminal && state.activeTurn === e.turnId &&
-          selected && e.turnId !== selected.afterTurn) {
+      const mainTurn = !e.agentId && current && !state.terminal &&
+        (state.nativeStart?.turnId ?? state.activeTurn) === e.turnId
+      if (mainTurn) state.streamProjection = false
+      // The native start hook precedes its asynchronous observation. Bind request
+      // selection to that synchronous lifecycle evidence, without delaying the engine.
+      // Lifecycle changes revoke authenticated settings before another request runs.
+      if (mainTurn && state.config && selected && e.turnId !== selected.afterTurn) {
         const proposed = { ...e }
         if (selected.model !== undefined) proposed.model = selected.model
         if (selected.effort !== undefined) proposed.effort = selected.effort
@@ -613,7 +733,7 @@ export function register(on) {
       if (block && current && state.activeTurn === block.turnId) {
         const args = Object.fromEntries(Object.entries(e).filter(([key]) =>
           !['tool', 'tool_use_id', 'agentId', 'consent', 'requestMeta'].includes(key)))
-        block.block.arguments = boundedObservation(state, JSON.stringify(args))
+        block.block.arguments = boundedTool(state, args)
         block.block.state = 'running'
         enqueue(state, { ...block, block: { ...block.block } })
       }
@@ -623,8 +743,9 @@ export function register(on) {
       try {
         if (block && current === state.binding && stamp === state.generation && !state.terminal) {
           block.block.state = result?.isError || typeof result?.deny === 'string' ? 'failed' : 'succeeded'
-          const text = result?.text ?? result?.deny
-          if (typeof text === 'string') block.block.result = boundedObservation(state, text)
+          const observed = result?.text ?? result?.deny ??
+            (result && typeof result === 'object' && (result.content !== undefined || result.output !== undefined) ? result : undefined)
+          if (observed !== undefined) block.block.result = boundedTool(state, observed)
           enqueue(state, { ...block, block: { ...block.block } })
         }
       } catch {}

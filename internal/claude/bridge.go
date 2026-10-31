@@ -34,16 +34,17 @@ type envelope struct {
 }
 
 type modEvent struct {
-	TranscriptPath  string         `json:"transcriptPath,omitempty"`
-	Block           *modBlock      `json:"block,omitempty"`
-	Title           *protocol.Text `json:"title,omitempty"`
-	ObservedCommand string         `json:"observedCommand,omitempty"`
-	Kind            string         `json:"kind"`
-	UUID            string         `json:"uuid,omitempty"`
-	Role            string         `json:"role,omitempty"`
-	Text            protocol.Text  `json:"text,omitempty"`
-	TurnID          string         `json:"turnId,omitempty"`
-	Aborted         bool           `json:"aborted,omitempty"`
+	Discovery       *desktopDiscovery `json:"discovery,omitempty"`
+	TranscriptPath  string            `json:"transcriptPath,omitempty"`
+	Block           *modBlock         `json:"block,omitempty"`
+	Title           *protocol.Text    `json:"title,omitempty"`
+	ObservedCommand string            `json:"observedCommand,omitempty"`
+	Kind            string            `json:"kind"`
+	UUID            string            `json:"uuid,omitempty"`
+	Role            string            `json:"role,omitempty"`
+	Text            protocol.Text     `json:"text,omitempty"`
+	TurnID          string            `json:"turnId,omitempty"`
+	Aborted         bool              `json:"aborted,omitempty"`
 	// Lost rows are disclosed, never converted to invented message identities.
 	Dropped       bool     `json:"dropped,omitempty"`
 	CanInput      *bool    `json:"canInput,omitempty"`
@@ -57,13 +58,16 @@ type modEvent struct {
 }
 
 type bridgeResponse struct {
-	Nonce           string `json:"nonce,omitempty"`
-	TTLMillis       int64  `json:"ttlMillis,omitempty"`
-	Sequence        uint64 `json:"sequence,omitempty"`
-	Commands        []any  `json:"commands,omitempty"`
-	ReadOnly        bool   `json:"readOnly"`
-	HistoryBoundary string `json:"historyBoundary"`
-	Error           string `json:"error,omitempty"`
+	Rename          *desktopMetadata  `json:"rename,omitempty"`
+	Metadata        *desktopMetadata  `json:"metadata,omitempty"`
+	Discovery       *desktopDiscovery `json:"discovery,omitempty"`
+	Nonce           string            `json:"nonce,omitempty"`
+	TTLMillis       int64             `json:"ttlMillis,omitempty"`
+	Sequence        uint64            `json:"sequence,omitempty"`
+	Commands        []any             `json:"commands,omitempty"`
+	ReadOnly        bool              `json:"readOnly"`
+	HistoryBoundary string            `json:"historyBoundary"`
+	Error           string            `json:"error,omitempty"`
 }
 
 // ServeHTTP must be mounted on the helper's distinct loopback listener. A public
@@ -94,16 +98,24 @@ func (a *Adapter) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		a.register(w, input)
 		return
 	}
+	if path == "rename" {
+		a.queryDesktopRename(w, request)
+		return
+	}
 	var input envelope
 	if decodeRequest(request, &input) != nil || !nativeUUID.MatchString(input.SessionID) || !opaque.MatchString(input.Nonce) {
 		a.respond(w, http.StatusBadRequest, bridgeResponse{Error: "Invalid Mod envelope"})
+		return
+	}
+	if path == "metadata" {
+		a.queryDesktopMetadata(w, request, input)
 		return
 	}
 	if path == "pull" {
 		a.pull(w, input)
 		return
 	}
-	if path != "result" && path != "push" && path != "revoke" {
+	if path != "result" && path != "push" && path != "revoke" && path != "discovery" {
 		a.respond(w, http.StatusNotFound, bridgeResponse{Error: "Not found"})
 		return
 	}
@@ -118,6 +130,12 @@ func (a *Adapter) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		HistoryBoundary: HistoryBoundary}
 	status := http.StatusOK
 	switch path {
+	case "discovery":
+		if a.origin != "desktop" || input.Sequence != 0 || input.Events != nil || input.Result != nil {
+			err = errors.New("Discovery requires a read-only Desktop envelope")
+		} else {
+			result.Discovery = cloneDesktopDiscovery(r.discovery)
+		}
 	case "result":
 		err = a.commandResultLocked(r, input)
 	case "revoke":
@@ -139,7 +157,7 @@ func (a *Adapter) ServeHTTP(w http.ResponseWriter, request *http.Request) {
 		result.Error = err.Error()
 	}
 	a.mu.Unlock()
-	if err == nil && path != "pull" {
+	if err == nil && path != "pull" && path != "discovery" {
 		a.changed(input.SessionID)
 	}
 	a.respond(w, status, result)
@@ -218,6 +236,9 @@ func (a *Adapter) pushLocked(r *registration, input envelope) error {
 		return errors.New("Mod event sequence changed")
 	}
 	for _, event := range input.Events {
+		if event.Discovery != nil && r.origin != "desktop" {
+			return errors.New("Discovery requires a Desktop registration")
+		}
 		if err := validateEvent(event); err != nil {
 			return err
 		}
@@ -232,6 +253,8 @@ func (a *Adapter) pushLocked(r *registration, input envelope) error {
 	}
 	for _, event := range input.Events {
 		switch event.Kind {
+		case "discovery":
+			working.discovery = cloneDesktopDiscovery(event.Discovery)
 		case "row":
 			if err := a.appendLocked(&working, event); err != nil {
 				return err
@@ -270,7 +293,7 @@ func (a *Adapter) pushLocked(r *registration, input envelope) error {
 		case "metadata":
 			working.transcript = event.TranscriptPath
 		case "title":
-			working.title = event.Title
+			working.title, working.renameReadback = event.Title, nil
 		case "start":
 			working.activeTurn, working.status = event.TurnID, "active"
 			working.activeHasUser = strings.TrimSpace(string(event.Text)) != ""
@@ -314,6 +337,9 @@ func (a *Adapter) pushLocked(r *registration, input envelope) error {
 }
 
 func validateEvent(e modEvent) error {
+	if e.Kind == "discovery" || e.Discovery != nil {
+		return validateDesktopDiscovery(e)
+	}
 	if e.TranscriptPath != "" && (e.Kind != "metadata" || len(e.TranscriptPath) > 4096) {
 		return errors.New("Invalid native metadata source")
 	}

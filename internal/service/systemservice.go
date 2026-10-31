@@ -120,7 +120,8 @@ func serveSystemService(options systemServiceOptions) error {
 	}
 	// The selected original account is resolved when a read needs it, and the
 	// resolution is remembered until it succeeds.
-	metadata := history.NewNativeHistory(nativeHome(sid))
+	var historyWorker *UserWorker
+	metadata := history.NewNativeHistory(nativeHome(sid), workerHistoryReader(&historyWorker))
 	workerTokenPath, _ := config["workerTokenPath"].(string)
 	if !filepath.IsAbs(workerTokenPath) {
 		return errors.New(systemServiceCredentialRefusal)
@@ -137,6 +138,7 @@ func serveSystemService(options systemServiceOptions) error {
 	}
 	workerCredential := UserWorkerTokenFunc(func(context.Context) (string, error) { return readEntryText(workerTokenPath) })
 	worker, err := NewUserWorker(workerURL, workerCredential, metadata, taskDirectory, DefaultUserWorkerTimeouts)
+	historyWorker = worker
 	if err != nil {
 		return err
 	}

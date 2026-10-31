@@ -8,13 +8,13 @@ import (
 )
 
 func TestNativeLeadingFieldsRemainVisible(t *testing.T) {
-	value, _, err := nativejson.Read(strings.NewReader(`{"z_summary":"important summary","a_details":"`+strings.Repeat("x", 10000)+`"}`), false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	value := nativejson.NewObject(
+		nativejson.Property{Name: "z_summary", Value: "important summary"},
+		nativejson.Property{Name: "a_details", Value: strings.Repeat("x", 2*limit)},
+	)
 	preview, _ := ToolPreview(value)
 	if !strings.HasPrefix(preview, `{"z_summary":"important summary","a_details":`) ||
-		!strings.HasSuffix(preview, nativejson.PreviewSuffix) {
+		!strings.Contains(preview, strings.TrimPrefix(nativejson.PreviewSuffix, "\n")) {
 		t.Fatalf("leading summary was displaced: %.100s", preview)
 	}
 }

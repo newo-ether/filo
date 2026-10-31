@@ -9,9 +9,9 @@ clients are outside this Windows integration.
 | Source ID | Role |
 | --- | --- |
 | `codex-desktop` | Native task control and bounded history through Codex Desktop |
-| `codex-cli` | Live-only catalog and control through the existing native daemon; separate Filo-created execution and task-free metadata reads |
-| `claude-code` | Native Mod observation, submitted/observed input, next-request settings and exact-turn Stop; separate Filo-created execution |
-| `claude-desktop` | Native Mod observation, submitted/observed input, next-request settings and exact-turn Stop implementation; embedded Code runtime qualification pending; no Chat or Cowork support |
+| `codex-cli` | Live-only catalog and control through the existing native daemon; existing Filo-owned execution and task-free metadata reads; no new conversations |
+| `claude-code` | Native Mod observation, submitted/observed input, next-request effort and exact-turn Stop; existing Filo-owned execution; no new conversations |
+| `claude-desktop` | Native Mod observation, submitted/observed input, next-request effort, exact-turn Stop and bound native Rename; no external model catalog or model switching; no Chat or Cowork support |
 
 A Desktop-only installation needs no separate CLI. CLI-only or Claude-only workers
 do not register the Desktop auxiliary Host or allocate Desktop task executors.
@@ -29,8 +29,9 @@ may be hidden. Their descriptors are not filtered by process presence, readable
 history or successful observation. Native online state requires independent,
 source-specific native readiness evidence. Gateway health, executable discovery
 and readable historical files cannot supply that evidence. An offline descriptor
-can still advertise explicit creation; constructing an adapter does not launch a
-native session or send a model request.
+can still advertise supported creation for Codex Desktop; neither CLI source
+permits creation. Constructing an adapter does not launch a native session or send
+a model request.
 
 Selecting either Claude source installs the persistent helper at
 `~/.claude/skills/filo-observer` in the selected user's profile. The normal flow
@@ -38,8 +39,13 @@ requires no manual copy, environment variable or loading command. Only Filo-owne
 payload and receipts are managed; unrelated or user-modified files are preserved.
 Local configuration references the private worker token file without copying the
 secret. Claude Code and Claude Desktop keep independent native registrations and
-online state even when both use the same helper and loopback bridge. Mod observation
-starts at registration and does not reconstruct a pre-registration transcript.
+online state even when both use the same helper and loopback bridge. Live observation
+starts at registration. Native lifecycle metadata supplies the exact transcript path.
+For an existing Desktop registration that attached after that event, the exact persisted
+host/engine mapping also permits a lookup of the engine UUID's JSONL under the selected
+native projects store. The lookup rejects missing/ambiguous identity, multiple files,
+links outside the store and more than 1024 project entries. Both paths expose the same
+bounded read-only pages and grant no runtime or control authority.
 
 Claude Mods need terminal Claude Code v2.1.287+ or Desktop's embedded Claude Code
 engine v2.1.286+; the Desktop app version or an external CLI version is insufficient.
@@ -78,12 +84,16 @@ state is refused; list/history/subscription reads never admit a writer.
 
 ## Filo-owned CLI and Claude Code execution
 
-Creation requires the first text message and its client identity in the same
-request. Selecting a source or opening a draft never creates an empty native
-session. Original CLI history outside admitted native daemon ownership stays
-read-only. Mod-observed sessions expose only independently proven operations.
-Filo-created execution uses its corresponding private execution owner; normally
-launched terminals retain the native daemon owner described below.
+New conversations are unsupported for both CLI sources. Their private-worker and
+public-gateway descriptors advertise `create:false`, and scoped creation returns
+HTTP 501 before native allocation. The source-level Create methods also refuse
+without launching an executor or broker. Previously accepted native work keeps its
+existing owner, controls and independent lifetime. Desktop creation still requires
+the first text message and client identity in the same request; selecting a source
+or opening a draft never creates an empty session. Original CLI history outside
+admitted native daemon ownership stays read-only. Mod-observed sessions expose only
+independently proven operations. Existing Filo-created execution uses its private
+owner; normally launched terminals retain the native daemon owner described below.
 
 Filo-owned CLI tasks support idle Send, native active-turn steering, exact-turn
 Stop, and model, effort and service-tier settings when supported by the admitted
@@ -128,37 +138,80 @@ native message IDs. Display IDs may add a block index; the actual native identit
 is retained separately. Events with `parent_tool_use_id` are excluded so
 child/subagent output cannot be merged into the parent execution. Thinking
 signatures and redacted thinking are not projected as public text. The native
-window holds at most 128 rows, 24 KiB per serialized row and 256 KiB per session;
-oldest rows are evicted to fit. Oversized rows are omitted as whole rows; a
+window holds at most 128 rows and 8 MiB per session; ordinary text rows retain their
+24 KiB serialized cap, while tool rows admit up to 2 MiB including JSON escaping.
+Complete tool arguments/results use the common decoded-field preview (256 KiB leaf
+text target, 384 KiB serialized field cap). Original Mod tool fields use the same
+budgets, a 3 MiB event batch and 4 MiB bridge body; its observation queue is bounded
+at 96 events / 8 Mi UTF-16 units. Oversized partial inputs are omitted until the
+complete native tool call supplies parseable fields. Oldest rows are evicted to fit.
+Oversized text rows are omitted as whole rows; a
 discarded prefix cannot reappear as an apparently complete suffix. This is an
 observation window, not a complete durable transcript. Source-level Claude Code
-model reads prefer a verified live Mod catalog. Without one, they use a disposable
-native stream-json initialization without a user message, session creation,
-execution broker or upload grant. They close only their own task-free input and
-fence returned metadata against account/scope changes. They do not require an
+model reads use that source's disposable native stream-json initialization without
+a user message, session creation, execution broker or upload grant. Mod
+`config.list` aliases never override this catalog. Native value IDs, display names
+and effort levels are preserved; duplicate value IDs retain their first entry,
+while distinct IDs sharing a label stay distinct. Reads close only their own
+task-free input and fence returned metadata against account/scope changes. They do not require an
 existing Filo session or establish native online state.
 Neither Claude source advertises account usage.
 
 Media output rows remain unsupported, and the owned executor denies native
 approval requests. Mod-observed original sessions provide bounded native streamed
 text, thinking, tool names/arguments/results and running/terminal activity state,
-model catalogs, explicitly non-exact submitted/observed input, session-local
-next-turn model/effort selections and exact-turn Stop. Native turn/step/block
+current-model readback, explicitly non-exact submitted/observed input, session-local
+next-turn effort selections and exact-turn Stop. Native turn/step/block
 coordinates identify text and thinking; native tool-use IDs join tool results.
 Append UUID rows are never assigned a turn by text or event order, and assistant
 append copies are omitted once native streaming projection is active. Media rows
 remain unsupported. Optional bounded native title metadata is read separately
-from conversation history and matched to the native session identity. Title
-read failures cannot interrupt conversation reads. The SSE heartbeat refreshes
+from conversation history and matched to the native session identity. Terminal
+metadata includes native `ai-title` / `aiTitle` records; an explicit `custom-title`
+rename takes precedence. Title read failures cannot interrupt conversation reads.
+The Mod retains one bounded classic title/transcript-path observation for the exact
+native session and source, and re-emits it after transport loss creates a fresh
+registration. Rows, turns and controls are still discarded. Native lifecycle
+start/end, ID or source changes discard this metadata too; a new helper instance
+without a fresh classic event has no cached metadata to recover. Unknown titles
+stay unknown, and no native hook or write is invoked to obtain them.
+Original Mod live rows remain bounded to the current registration. Historical text,
+thinking and tool calls come only from the lifecycle-reported, session-qualified
+transcript under the selected native projects store. Text/thinking keep native
+UUIDs; tool rows use native `tool_use.id` for both display and native identity,
+with the assistant envelope UUID as their group and no invented turn. Qualified
+user `tool_result.tool_use_id` joins only an earlier exact call; results never
+create a second tool row. Missing or ambiguous results leave state unknown,
+while matched `is_error` determines failed/succeeded. Activity rows require an
+activity-enabled read. Each source page scans at most 8 MiB and emits at most
+128 rows / 3 MiB; tool matching may read at most one additional 8 MiB window
+newer than that page boundary, within the signed snapshot. Results outside these
+windows remain unknown. Tool fields use the shared decoded JSON preview and
+2 MiB serialized tool-row bound.
+Pages exclude sidechain, metadata and nested-tool records and use registration
+time as their upper boundary; history never establishes runtime state, input
+acceptance or control authority. Signed cursors bind the store scope, source,
+session, registration, page boundary and fixed snapshot end. Appends preserve
+older cursors and cannot add results to an old snapshot; a changed boundary or
+binding is refused. An initial unavailable or out-of-store transcript leaves the
+live window usable, while an old history cursor fails explicitly. Historical
+media and branch ancestry are not reconstructed. Native `session.messages()`
+supplies neither message UUIDs nor a proven message-to-turn mapping and is not
+used to invent identities. `/clear`,
+`/resume` and `/branch` revoke the old binding; the continuing timer registers the
+new native ID without another `session.start` hook. Rebinding can read qualified
+older transcript records but never proves that the session is idle.
+The SSE heartbeat refreshes
 idle metadata changes even without a native conversation notification. Bounded
 content truncation marks the observation window incomplete without clearing an
 authoritative active turn; only lost events invalidate the native lifecycle state.
 Native authentication and configuration stay
 unchanged. Filo-owned CLI tasks support native rename/archive and raw uploads;
 Claude Code supports native rename and raw uploads with an explicit private
-`--add-dir` grant. Existing brokers without that grant retain their permissions;
-new attachment-enabled sessions use a separate broker. Unknown mutation outcomes
-never trigger a replay to the old owner. Claude Desktop uses only the native Code
+`--add-dir` grant. Existing brokers and sessions keep their original upload
+authority during upgrades; disabling creation does not rewrite those owners.
+Unknown mutation outcomes never trigger a replay to the old owner. Claude Desktop
+uses only the native Code
 Mod path and its independently admitted operations. Unknown
 native sessions never gain control from a shared ID or readable history. These
 limits preclude full Codex Desktop capability parity.
@@ -223,10 +276,12 @@ same-turn idle readback. Ordinary persistent installed CLI qualification repeate
 that gate without `--plugin-dir`. A separate installed Desktop fixture qualified
 one exact-turn abort with matching native completion and same-turn idle readback.
 
-Both Mod surfaces implement bounded engine/core model-row options from
+Both Mod surfaces observe bounded engine/core model-row choices from
 `config.list`, the current `session.model` and observed main-loop `turn.step`
-effort. The isolated CLI bridge qualified these observations before exact-turn
-Stop. An installed Desktop fixture also qualified catalog/model observation and
+effort. Config choices are unresolved aliases, so they supply neither the public
+model directory nor a model mutation grant. Both Mod surfaces advertise only
+`effort` in settings and keep it independent of catalog availability. The isolated
+CLI bridge qualified these observations before exact-turn Stop. An installed Desktop fixture also qualified catalog/model observation and
 actual effort confirmation from a subsequent native request. Request effort is not a
 model-specific choice list or a proven session setting; missing data stays
 unknown. In one native probe, the launch flag requested `high` while `turn.step`
@@ -234,8 +289,12 @@ reported `max`; only the observed request value is published.
 `config.set(model)` changed the menu value
 without changing `session.model` in the isolated probe. Builtin `model` and
 `effort` commands exist, but `command.run(model)` did not return within the bounded
-idle probe. Model/effort changes therefore use only the official `turn.step`
+idle probe. Effort changes therefore use only the official `turn.step`
 request rewrite, retained in registration-local state for subsequent main turns.
+The native start hook's synchronous turn identity admits the first request even
+while asynchronous observation is unfinished; settings received during that turn
+still wait for the following main turn. No bridge read delays native dispatch.
+Model mutations through the Mod are refused before command dispatch.
 The current turn and subagents stay unchanged; native configuration is not written.
 ACK means pending. Confirmation requires a settled engine/core trace with a native
 response and the actual request model/effort. Missing evidence remains pending;
@@ -244,6 +303,17 @@ request-API values, not a model-specific support guarantee. Filo-created
 stream-json sessions retain their separate execution path and guarantees.
 
 ### Claude Desktop control admission
+
+Desktop Code creation is unsupported through this integration. Both the private
+worker and public gateway advertise `create:false` and reject scoped session
+creation with HTTP 501 before native dispatch. The Mod operates on its registered
+current session; `session.start` is a lifecycle hook, not a callable constructor.
+The retained stream-json execution path serves previously Filo-created Claude
+Code sessions only and is never a fallback for Claude Desktop. Neither CLI source
+permits new creation. Agora keeps New Chat unavailable without an
+unsupported-creation notice in the catalog; existing conversations remain selectable.
+This boundary does not assert that Desktop itself lacks an internal create action;
+no supported external create path has been established for Filo.
 
 The inspected native Mod interface exposes `prompt.submit` without a native input
 message UUID. `session.messages` supplies role/text/tool data without that UUID;
@@ -277,14 +347,17 @@ does not prove an existing native session has reloaded them.
 Desktop's Code model menu uses bootstrap `modelSelectorConfig`, with account
 `model_selector_config` as a fallback, then selects the `code` surface's entries.
 This is separate from the engine/core `config.list` model choice aliases observed
-by the Mod. Filo currently copies a selected choice directly into `turn.step.model`;
+by the Mod. Earlier Filo code copied a selected choice directly into `turn.step.model`;
 the rejected Desktop `sonnet` and `opus` requests therefore passed those raw aliases
 to the provider rather than going through the engine's internal alias resolver.
 The inspected public Mod declarations expose model completion/fork/classification
 and current-model readback, but neither the Desktop catalog nor a read-only alias
 resolver. Native `config.set(model)` writes user settings and does not satisfy the
 registration-local settings contract. No alias mapping is inferred from model
-family names or the current model. Desktop model selection remains unqualified.
+family names or the current model. Desktop model selection is unavailable through
+Filo: its descriptor and sessions advertise `models:false`, settings contain only
+`effort`, and the public model route returns HTTP 501. Neither another source's
+CLI catalog nor a static alias table substitutes for the Desktop catalog.
 
 A separate installed Desktop probe sent `/model deepseek-flash` once through the
 existing idle Send path. It returned an explicitly rejected input receipt, with
@@ -296,10 +369,13 @@ the requested model. The rejected input was not replayed, and no implementation
 was substituted. Manual Desktop `/model` and direct native `command.run` remain
 separate, untested paths.
 
-The inspected native session API also exposes no archive/delete operation.
-Desktop's own renderer IPC has a delete operation, but an externally callable,
-supported path has not been established. Filo leaves the fixture's native records
-intact; cleanup requires the owner's native Desktop action.
+The official Mod session API exposes no archive/delete method. The inspected
+Desktop host also includes a built-in `ccd_session` archive tool, which stops its
+process and normally cleans the worktree. Its scope and effects do not implement
+Filo's preserve-history archive contract. An admitted external path is still
+unqualified; see [the native capability evidence](claude-desktop-native-capabilities.md).
+Filo leaves the fixture's native records intact; cleanup requires the owner's
+native Desktop action.
 
 ## Ownership and failure
 

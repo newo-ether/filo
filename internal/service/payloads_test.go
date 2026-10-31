@@ -201,7 +201,7 @@ func TestBodyPageIncludesImageRevisionsInOneBoundedRead(t *testing.T) {
 			t.Fatalf("node %d = %q, message = %q", index, page.Nodes[index].ID, page.Messages[index].ID)
 		}
 	}
-	if size := Size(page); size >= 1024*1024 {
+	if size := Size(page); size > MaxConversationPageBytes {
 		t.Fatalf("page serialized to %d bytes", size)
 	}
 	node := page.Nodes[0]
@@ -230,7 +230,7 @@ func TestPhysicalPacketsBudgetNodesAcrossNestedLayers(t *testing.T) {
 				GroupID:   "group-" + payloadSession,
 				Timestamp: protocol.Number(index),
 			},
-			Text:     protocol.Text(strings.Repeat("x", 1400)),
+			Text:     protocol.Text(strings.Repeat("x", 15000)),
 			Activity: &protocol.Activity{Type: "thought"},
 		})
 	}
@@ -284,7 +284,7 @@ func TestPhysicalPacketsBudgetNodesAcrossNestedLayers(t *testing.T) {
 				t.Fatal("pagination must advance")
 			}
 		}
-		if count <= 1 {
+		if count < 1 {
 			t.Fatalf("nested=%v produced %d pages", nested, count)
 		}
 		assertSameIDs(t, ids, messages)

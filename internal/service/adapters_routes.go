@@ -267,7 +267,27 @@ func (v *adapterView) mutate(w *tracking, r *http.Request, id, action string) er
 	if err != nil {
 		return err
 	}
-	access, err := v.access(r.Context(), id)
+	var access *protocol.SessionAccess
+	if provider, ok := v.Sessions.(interface {
+		CatalogAccess(context.Context, string) (protocol.SessionAccess, error)
+	}); ok && (action == "rename" || action == "archive") {
+		catalog, readErr := provider.CatalogAccess(r.Context(), id)
+		if readErr != nil {
+			return readErr
+		}
+		catalogAccess, projectErr := v.projectAccess(id, catalog)
+		if projectErr != nil {
+			return projectErr
+		}
+		management := action == "rename" && catalogAccess.Capabilities.Rename ||
+			action == "archive" && catalogAccess.Capabilities.Archive
+		if management && catalogAccess.Binding == token {
+			access = catalogAccess
+		}
+	}
+	if access == nil {
+		access, err = v.access(r.Context(), id)
+	}
 	if err != nil {
 		return err
 	}

@@ -5,16 +5,17 @@ package codex
 
 import (
 	"bufio"
-	"strings"
-
+	"context"
 	"errors"
 	"fmt"
-	"github.com/newo-ether/filo/internal/nativejson"
 	"io"
 	"math"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/newo-ether/filo/internal/nativejson"
 )
 
 // RpcError mirrors CodexRpcError: an RPC error object carried by the transport.
@@ -37,11 +38,12 @@ type rpcReply struct {
 // finish their own I/O. The caller must supply Filo-owned endpoints, never a
 // process-lifetime control for the original Desktop or an accepted native turn.
 type Rpc struct {
-	reader *bufio.Reader
-	input  io.Reader
-	mu     sync.Mutex
-	nextId int64
-	output io.Writer
+	packetLimit int
+	reader      *bufio.Reader
+	input       io.Reader
+	mu          sync.Mutex
+	nextId      int64
+	output      io.Writer
 	// Handlers receive server-originated packets and close causes. Callbacks run
 	// on the reader goroutine and must not block on this Rpc's own responses.
 	onRequest      func(packet map[string]any)
@@ -76,7 +78,13 @@ func (r *Rpc) SetClosedHandler(onClosed func(cause error)) {
 }
 
 func NewRpc(input io.Reader, output io.Writer) *Rpc {
-	r := &Rpc{reader: bufio.NewReader(input), input: input, output: output,
+	return NewBoundedRpc(input, output, 0)
+}
+
+// NewBoundedRpc bounds native JSONL packets before decoding. Zero retains the
+// existing transport policy for callers that do not opt into bounded history.
+func NewBoundedRpc(input io.Reader, output io.Writer, limit int) *Rpc {
+	r := &Rpc{packetLimit: limit, reader: bufio.NewReader(input), input: input, output: output,
 		pending: make(map[string]chan rpcReply), writes: make(map[*rpcWrite]struct{}),
 		wakeWriter: make(chan struct{}, 1), readerDone: make(chan struct{}), writerDone: make(chan struct{})}
 	go r.writeLoop()
@@ -90,6 +98,15 @@ func (r *Rpc) Request(method string, params any) (any, error) {
 }
 
 func (r *Rpc) RequestTimeout(method string, params any, timeout time.Duration) (any, error) {
+	return r.RequestContext(context.Background(), method, params, timeout)
+}
+
+// RequestContext cancels only this request, leaving the shared native owner and
+// other requests intact.
+func (r *Rpc) RequestContext(ctx context.Context, method string, params any, timeout time.Duration) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	deadline := time.Now().Add(timeout)
 	r.mu.Lock()
 	if r.closedErr != nil {
@@ -110,6 +127,10 @@ func (r *Rpc) RequestTimeout(method string, params any, timeout time.Duration) (
 	defer timer.Stop()
 	select {
 	case reply := <-channel:
+		return reply.value, reply.err
+	case <-ctx.Done():
+		r.expire(write, ctx.Err())
+		reply := <-channel
 		return reply.value, reply.err
 	case <-timer.C:
 		r.expire(write, fmt.Errorf("Codex request timed out: %s", method))
@@ -195,13 +216,34 @@ func (r *Rpc) readLoop() {
 	}
 }
 
-// readLine assembles one JSONL line of unbounded length. A final line without a
-// trailing newline is delivered once, then EOF is reported.
+// readLine assembles one JSONL packet under the configured optional hard bound.
+// A packet without a trailing newline is delivered once, then EOF is reported.
 func (r *Rpc) readLine() (string, error) {
 	var buf []byte
 	for {
-		chunk, err := r.reader.ReadString('\n')
+		var chunk []byte
+		var err error
+		if r.packetLimit > 0 && r.packetLimit-len(buf) < r.reader.Size() {
+			// Read the final partial buffer byte by byte so an unterminated
+			// oversized packet fails without waiting for another full buffer.
+			var b byte
+			b, err = r.reader.ReadByte()
+			if err == nil {
+				chunk = []byte{b}
+				if b != '\n' {
+					err = bufio.ErrBufferFull
+				}
+			}
+		} else {
+			chunk, err = r.reader.ReadSlice('\n')
+		}
+		if r.packetLimit > 0 && len(chunk) > r.packetLimit-len(buf) {
+			return "", errors.New("Native history packet exceeds its read bound")
+		}
 		buf = append(buf, chunk...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
 		if err == nil {
 			line := string(buf[:len(buf)-1])
 			return trimCarriageReturn(line), nil

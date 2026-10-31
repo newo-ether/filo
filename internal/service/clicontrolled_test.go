@@ -112,7 +112,7 @@ func newCLIControlledFixture(t *testing.T) (*CLIControlledSessions, *taskSession
 func TestCLIControlledUsesExactNativeTurns(t *testing.T) {
 	surface, fixture := newCLIControlledFixture(t)
 	ctx := context.Background()
-	created, receipt, err := surface.Create(ctx, "hello", "client", protocol.SessionSettings{})
+	created, receipt, err := surface.TaskSessions.Create(ctx, "hello", "client", protocol.SessionSettings{})
 	if err != nil || created.ID != taskSessionsTaskID || receipt.TurnID != taskSessionsTurnID {
 		t.Fatalf("create=%+v receipt=%+v err=%v", created, receipt, err)
 	}
@@ -173,7 +173,7 @@ func TestCLIControlledStatusRequiresNativeEvidence(t *testing.T) {
 	if status := surface.nativeStatus(context.Background(), missing); status.State != "unavailable" {
 		t.Fatalf("missing runtime: %+v", status)
 	}
-	if _, _, err := surface.Create(context.Background(), "hello", "client", protocol.SessionSettings{}); err != nil {
+	if _, _, err := surface.TaskSessions.Create(context.Background(), "hello", "client", protocol.SessionSettings{}); err != nil {
 		t.Fatal(err)
 	}
 	if status := surface.nativeStatus(context.Background(), available); status.State != "connected" {

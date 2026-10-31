@@ -14,7 +14,7 @@ func mutationFixture(t *testing.T) (*Adapter, string, context.Context) {
 	a, nonce, ctx := stopFixture(t)
 	yes := true
 	status, _ := bridgeCall(t, a, "push", envelope{SessionID: fixtureSession, Nonce: nonce, Sequence: 2,
-		Events: []modEvent{{Kind: "snapshot", CanStop: &yes, CanInput: &yes, CanSettings: &yes, ModelOptions: []string{"sonnet"}}}})
+		Events: []modEvent{{Kind: "snapshot", CanStop: &yes, CanInput: &yes, CanSettings: &yes}}})
 	if status != http.StatusOK {
 		t.Fatal("mutation snapshot refused")
 	}
@@ -187,9 +187,13 @@ func TestModSettingsWaitForNextMatchingRequestAndReportActual(t *testing.T) {
 	for _, actual := range []string{"low", "max"} {
 		t.Run(actual, func(t *testing.T) {
 			a, nonce, ctx := mutationFixture(t)
+			access, err := a.Access(ctx, fixtureSession)
+			if err != nil || access.Capabilities.Models || len(access.Capabilities.Settings) != 1 || access.Capabilities.Settings[0] != "effort" {
+				t.Fatalf("request effort depends on model catalog: %+v %v", access, err)
+			}
 			done := make(chan error, 1)
 			go func() {
-				done <- a.UpdateSettings(ctx, fixtureSession, protocol.SessionSettings{Model: protocol.Known("sonnet"), Effort: protocol.Known("low")})
+				done <- a.UpdateSettings(ctx, fixtureSession, protocol.SessionSettings{Effort: protocol.Known("low")})
 			}()
 			command := mutationCommand(t, a, nonce)
 			mutationResult(t, a, nonce, command)

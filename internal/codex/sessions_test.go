@@ -189,7 +189,9 @@ func TestNativeTaskSessionSnapshotReportsTheNativeRuntime(t *testing.T) {
 		t.Fatalf("snapshot: %v", err)
 	}
 	runtime := snapshot.Page.Runtime
-	if runtime == nil { t.Fatal("missing native runtime") }
+	if runtime == nil {
+		t.Fatal("missing native runtime")
+	}
 	if runtime.Title == nil || *runtime.Title != "Native task title" {
 		t.Fatalf("native title = %v", runtime.Title)
 	}

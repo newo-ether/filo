@@ -71,7 +71,7 @@ func NewCLIControlledSessions(options CLIControlledOptions) (*CLIControlledSessi
 }
 
 func (s *CLIControlledSessions) Capabilities() protocol.AdapterCapabilities {
-	return protocol.AdapterCapabilities{Create: true, History: true, Live: true, IdleSend: true,
+	return protocol.AdapterCapabilities{History: true, Live: true, IdleSend: true,
 		Stop: true, ActiveSend: "native-steer", Settings: []string{"model", "effort", "serviceTier"},
 		Rename: true, Archive: true, Uploads: true,
 		Models: s.metadata != nil || s.reader.Capabilities().Models,
@@ -98,15 +98,8 @@ func (s *CLIControlledSessions) fenced(ctx context.Context) (context.Context, er
 	}), nil
 }
 
-func (s *CLIControlledSessions) Create(ctx context.Context, text, clientID string, settings protocol.SessionSettings) (protocol.Session, protocol.SendReceipt, error) {
-	ctx, err := s.fenced(ctx)
-	if err != nil {
-		return protocol.Session{}, protocol.SendReceipt{}, err
-	}
-	if text == "" {
-		return protocol.Session{}, protocol.SendReceipt{}, errors.New("First message is required")
-	}
-	return s.TaskSessions.Create(ctx, text, clientID, settings)
+func (s *CLIControlledSessions) Create(context.Context, string, string, protocol.SessionSettings) (protocol.Session, protocol.SendReceipt, error) {
+	return protocol.Session{}, protocol.SendReceipt{}, codexcli.ErrUnsupported
 }
 
 func (s *CLIControlledSessions) Access(ctx context.Context, id string) (protocol.SessionAccess, error) {
@@ -148,6 +141,9 @@ func (s *CLIControlledSessions) Access(ctx context.Context, id string) (protocol
 	if access.Capabilities.Live || access.Capabilities.IdleSend {
 		access.Capabilities.Rename, access.Capabilities.Archive = true, true
 	}
+	// Source metadata is read-only and remains available while a task narrows control.
+	caps := s.Capabilities()
+	access.Capabilities.Models, access.Capabilities.Usage = caps.Models, caps.Usage
 	after, err := s.scope(ctx)
 	if err != nil || after != scope {
 		return protocol.SessionAccess{}, codexcli.ErrUnavailable

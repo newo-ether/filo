@@ -15,97 +15,113 @@ import (
 
 const limit = nativejson.PreviewUnits
 
-// ToolPreview serializes a bounded preview. A nil value has no preview.
-// Native and projected objects retain their declared property order. Plain Go
-// maps have no insertion order and are sorted for deterministic local fixtures.
+// MaxBytes bounds one serialized tool field, including JSON escaping.
+const MaxBytes = 384 * 1024
+
+// Read tool values without applying path-based projection budgets a second time.
+// A wrapper keeps fields named "items" from being mistaken for native records.
+func decodeToolJSON(text string) (any, error) {
+	value, _, err := nativejson.Read(strings.NewReader(`{"toolValue":`+text+`}`), false)
+	if err != nil {
+		return nil, err
+	}
+	fields, _ := nativejson.Fields(value)
+	return fields["toolValue"], nil
+}
+
+// ToolPreview bounds decoded values, never a serialized JSON prefix. JSON held
+// inside a string is decoded first so arguments remain usable by native renderers.
 func ToolPreview(value any) (string, bool) {
 	if value == nil {
 		return "", false
 	}
-	result := ""
-	truncated := false
-	appendPart := func(part string) {
-		remaining := limit - utf16Len(result)
-		if utf16Len(part) > remaining {
-			truncated = true
+	if text, ok := nativejson.AsText(value); ok {
+		if decoded, err := decodeToolJSON(text); err == nil {
+			value = decoded
+		} else {
+			if json.Valid([]byte(text)) {
+				return jsonString(nativejson.PreviewSuffix), true
+			}
+			return boundedText(text, limit), true
 		}
-		result += sliceUTF16(part, remaining)
 	}
-	var visit func(value any, depth int)
-	visit = func(value any, depth int) {
-		if truncated {
-			return
+	for budget := limit; budget >= 1; budget /= 2 {
+		nodes := 4096
+		bounded := boundValue(value, budget, 0, &nodes)
+		encoded := jsonLiteral(bounded)
+		if len(encoded) <= MaxBytes {
+			return encoded, true
 		}
-		if depth > 100 {
-			truncated = true
-			return
-		}
-		switch typed := value.(type) {
-		case nativejson.SurrogateText:
-			visit(string(typed), depth)
-		case string:
-			appendPart(jsonString(sliceUTF16(typed, limit+1)))
-			if utf16Len(typed) > limit {
-				truncated = true
-			}
-		case []any:
-			appendPart("[")
-			for index, item := range typed {
-				if truncated {
-					break
-				}
-				if index > 0 {
-					appendPart(",")
-				}
-				visit(item, depth+1)
-			}
-			appendPart("]")
-		case *nativejson.Object, map[string]any:
-			fields, _ := nativejson.Fields(typed)
-			if object, ok := typed.(*nativejson.Object); ok && object == nil {
-				appendPart("null")
-				return
-			}
-			appendPart("{")
-			var keys []string
-			if ordered, ok := typed.(*nativejson.Object); ok {
-				keys = ordered.Keys()
-			} else {
-				for key := range fields {
-					keys = append(keys, key)
-				}
-				sort.Strings(keys)
-			}
-			for keyIndex, key := range keys {
-				if truncated {
-					break
-				}
-				if keyIndex > 0 {
-					appendPart(",")
-				}
-				appendPart(jsonString(sliceUTF16(key, limit+1)))
-				if utf16Len(key) > limit {
-					truncated = true
-					break
-				}
-				appendPart(":")
-				visit(fields[key], depth+1)
-			}
-			appendPart("}")
-		default:
-			appendPart(jsonLiteral(value))
-		}
+	}
+	return jsonString(nativejson.PreviewSuffix), true
+}
+
+func boundedText(text string, budget int) string {
+	if utf16Len(text) <= budget && len(text) <= budget {
+		return text
+	}
+	prefix := trimTrailingHighSurrogate(sliceUTF16(text, budget))
+	for len(prefix) > budget {
+		_, size := utf8.DecodeLastRuneInString(prefix)
+		prefix = prefix[:len(prefix)-size]
+	}
+	return prefix + nativejson.PreviewSuffix
+}
+
+func boundValue(value any, budget, depth int, nodes *int) any {
+	*nodes--
+	if depth > 64 || *nodes < 0 {
+		return nativejson.SurrogateText(nativejson.PreviewSuffix)
 	}
 	if text, ok := nativejson.AsText(value); ok {
-		appendPart(text)
-	} else {
-		visit(value, 0)
+		// Nested JSON strings occur in native function arguments and MCP results.
+		if len(text) > budget {
+			if decoded, err := decodeToolJSON(text); err == nil {
+				return nativejson.SurrogateText(jsonLiteral(boundValue(decoded, budget, depth+1, nodes)))
+			}
+			if json.Valid([]byte(text)) {
+				return nativejson.SurrogateText(jsonString(nativejson.PreviewSuffix))
+			}
+		}
+		return nativejson.SurrogateText(boundedText(text, budget))
 	}
-	if truncated {
-		result = trimTrailingHighSurrogate(result)
-		result += nativejson.PreviewSuffix
+	switch typed := value.(type) {
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			if *nodes <= 0 {
+				result = append(result, nativejson.SurrogateText(nativejson.PreviewSuffix))
+				break
+			}
+			result = append(result, boundValue(item, budget, depth+1, nodes))
+		}
+		return result
+	case *nativejson.Object, map[string]any:
+		if object, ok := typed.(*nativejson.Object); ok && object == nil {
+			return nil
+		}
+		fields, _ := nativejson.Fields(typed)
+		var keys []string
+		if ordered, ok := typed.(*nativejson.Object); ok {
+			keys = ordered.Keys()
+		} else {
+			for key := range fields {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+		}
+		result := nativejson.NewObject()
+		for _, key := range keys {
+			if *nodes <= 0 || len(key) > 4096 {
+				result.Set("_filo_truncated", nativejson.PreviewSuffix)
+				break
+			}
+			result.Set(key, boundValue(fields[key], budget, depth+1, nodes))
+		}
+		return result
+	default:
+		return value
 	}
-	return result, true
 }
 
 // sliceUTF16 returns the prefix counted in UTF-16 units. A cut that lands in
@@ -170,6 +186,32 @@ func jsonString(value string) string {
 
 // jsonLiteral matches JSON.stringify for scalars: non-finite numbers become null.
 func jsonLiteral(value any) string {
+	if text, ok := nativejson.AsText(value); ok {
+		return jsonString(text)
+	}
+	if fields, ok := nativejson.Fields(value); ok {
+		keys := make([]string, 0, len(fields))
+		if ordered, ok := value.(*nativejson.Object); ok {
+			keys = ordered.Keys()
+		} else {
+			for key := range fields {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+		}
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, jsonString(key)+":"+jsonLiteral(fields[key]))
+		}
+		return "{" + strings.Join(parts, ",") + "}"
+	}
+	if items, ok := value.([]any); ok {
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			parts = append(parts, jsonLiteral(item))
+		}
+		return "[" + strings.Join(parts, ",") + "]"
+	}
 	if number, ok := value.(float64); ok && (math.IsInf(number, 0) || math.IsNaN(number)) {
 		return "null"
 	}

@@ -36,17 +36,17 @@ type opening struct {
 }
 
 type Client struct {
-	mu        sync.Mutex
-	options   Options
-	ctx       context.Context
-	cancel    context.CancelFunc
-	socket    *exchange
-	opening   *opening
-	connected bool
+	mu         sync.Mutex
+	options    Options
+	ctx        context.Context
+	cancel     context.CancelFunc
+	socket     *exchange
+	opening    *opening
+	connected  bool
 	generation uint64
-	stopped   bool
-	failure   error
-	retryAt   time.Time
+	stopped    bool
+	failure    error
+	retryAt    time.Time
 }
 
 func NewClient(options Options) *Client {

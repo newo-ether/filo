@@ -13,7 +13,7 @@ import (
 
 const (
 	MaxRetainedBytes = 64 * 1024 * 1024
-	PreviewUnits     = 8192
+	PreviewUnits     = 256 * 1024
 	PreviewSuffix    = "\n[Filo preview truncated; full output remains in Codex.]"
 	maxDepth         = 100
 )
@@ -28,13 +28,12 @@ type decoder struct {
 	r        *bufio.Reader
 	retained int
 	rollout  bool
-	budgets  map[string]*budget
 }
 
 // Read consumes exactly one JSON document. The caller owns input size and lifetime.
-// Tool strings are validated even after their retained prefix reaches its budget.
+// Tool fields reach ToolPreview intact under the retained-state hard bound.
 func Read(input io.Reader, rolloutItem bool) (any, int, error) {
-	d := decoder{r: bufio.NewReaderSize(input, 64*1024), rollout: rolloutItem, budgets: make(map[string]*budget)}
+	d := decoder{r: bufio.NewReaderSize(input, 64*1024), rollout: rolloutItem}
 	v, err := d.value(nil, 0)
 	if err == nil {
 		_, tail := d.next()
@@ -258,6 +257,11 @@ func (d *decoder) stringPolicy(p path) (int, *budget) {
 		}
 		fields := p[i+2:]
 		first, _ := fields[0].(string)
+		// Serialized arguments/results must reach ToolPreview intact. The global
+		// retained-state bound rejects extremes; only decoded fields may be cut.
+		if first == "arguments" || first == "result" && len(fields) == 1 {
+			return -1, nil
+		}
 		if first == "restoreMessage" || first == "raw_content" {
 			return 0, nil
 		}
@@ -277,25 +281,7 @@ func (d *decoder) stringPolicy(p path) (int, *budget) {
 		if first == "contentItems" && len(fields) > 2 && fields[2] == "type" {
 			return -1, nil
 		}
-		if !previewField(first) {
-			return -1, nil
-		}
-		encoded, _ := json.Marshal(p[:i+3])
-		key := string(encoded)
-		shared := d.budgets[key]
-		if shared == nil {
-			shared = &budget{remaining: PreviewUnits}
-			d.budgets[key] = shared
-		}
-		return shared.remaining, shared
+		return -1, nil
 	}
 	return -1, nil
-}
-
-func previewField(s string) bool {
-	switch s {
-	case "arguments", "result", "contentItems", "aggregatedOutput", "changes", "agentsStates", "results", "aggregated_output", "stdout", "stderr", "formatted_output":
-		return true
-	}
-	return false
 }

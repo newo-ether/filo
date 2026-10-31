@@ -18,8 +18,10 @@ import (
 
 // Bounds for one private task executor.
 const (
-	// executorMaxPayload is the ws maxPayload option: one client packet.
+	// executorMaxPayload bounds one client request packet.
 	executorMaxPayload = 1024 * 1024
+	// Native replies precede tool projection and must retain complete JSON.
+	executorMaxOutput = nativejson.MaxRetainedBytes
 	// executorMaxPending bounds concurrent in-flight client requests.
 	executorMaxPending = 32
 	// executorDefaultIdle retires an idle native task, and executorDefaultCompleted
@@ -511,7 +513,7 @@ func (e *TaskExecutor) write(socket *WebSocket, message any) {
 		return
 	}
 	text := executorEncode(message)
-	if len(text) > executorMaxPayload {
+	if len(text) > executorMaxOutput {
 		socket.Terminate()
 		return
 	}
