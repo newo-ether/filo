@@ -25,6 +25,8 @@ const MaximumLines = 800
 // never reaches this set.
 var maintainedExtensions = map[string]struct{}{
 	".go":   {},
+	".js":   {},
+	".mjs":  {},
 	".ps1":  {},
 	".cs":   {},
 	".md":   {},

@@ -1,8 +1,8 @@
 {
-    "revision":  "f7edc900b2365f2c337b0bda8528d5193ac35bbd",
-    "revisionState":  "base snapshot with upstream working-tree update; immutable revision pending",
-    "workingTreeBaseRevision":  "8c7b4d6a1e33e208dd68f4ce641a4e664321803c",
-    "uncommittedFiles":  ["encryptedhttp/client_body.go", "encryptedhttp/gateway.go"],
+    "revision":  "751cee0e99dd3bdb1a598f80a11e998c5da0bb94",
+    "revisionState":  "runtime files and module metadata verified byte-for-byte against immutable upstream v1.0.25",
+    "licenseRevision":  "f7edc900b2365f2c337b0bda8528d5193ac35bbd",
+    "licenseState":  "original MIT license retained from the imported snapshot; upstream v1.0.25 has a different project license",
     "files":  [
                   {
                       "path":  "go.mod",

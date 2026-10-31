@@ -118,6 +118,23 @@ func TestSourceBudgetReportsEveryViolationInPathOrder(t *testing.T) {
 	}
 }
 
+func TestSourceBudgetIncludesMaintainedJavaScript(t *testing.T) {
+	for _, extension := range []string{".js", ".mjs"} {
+		t.Run(extension, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "hooks", "observer"+extension)
+			writeFixture(t, path, strings.Repeat("line\n", MaximumLines))
+			if err := Check(root); err != nil {
+				t.Fatal(err)
+			}
+			writeFixture(t, path, strings.Repeat("line\n", MaximumLines+1))
+			if err := Check(root); err == nil || !strings.Contains(err.Error(), "observer"+extension) {
+				t.Fatalf("oversized JavaScript accepted: %v", err)
+			}
+		})
+	}
+}
+
 // writeFixture writes one measured fixture file, creating its directory.
 func writeFixture(t *testing.T, path, body string) {
 	t.Helper()
