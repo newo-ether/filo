@@ -36,6 +36,10 @@ function Get-CimInstance {
 function Start-Sleep { param($Milliseconds) if($script:progress){$script:state='Running'} }
 Wait-GatewayReady
 Assert ($script:reads -eq 2) 'HTTP readiness alone cannot accept SCM recovery backoff'
+$config.bind='0.0.0.0'; $script:reads=0
+Wait-GatewayReady
+Assert ($script:reads -eq 1) 'Wildcard service binding is verified through encrypted loopback'
+$config.bind='127.0.0.1'
 foreach($case in @('paused','wrong-protocol')) {
     $script:progress=$false; $script:reads=0
     $script:state=if($case -eq 'paused'){'Paused'}else{'Running'}

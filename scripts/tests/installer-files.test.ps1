@@ -1,5 +1,6 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '..\windows\Install-Support.ps1')
+. (Join-Path $PSScriptRoot '..\windows\Installer-Tasks.ps1')
 function Assert($Value, $Message) { if (-not $Value) { throw $Message } }
 function Get-PermissionSddl([string]$Sddl) {
     # Windows may mark existing descendants auto-inherited when a parent ACL is
@@ -21,6 +22,15 @@ Assert ((Get-PermissionSddl 'D:(A;;FA;;;SY)') -cne (Get-PermissionSddl 'D:P(A;;F
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('filo-install-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture | Out-Null
 try {
+    Assert ((Get-FiloInstallBind '' '') -eq '0.0.0.0') 'New public installations listen on all IPv4 interfaces'
+    foreach ($address in @('0.0.0.0','127.0.0.1','100.64.1.2','100.127.255.255')) {
+        Assert ((Get-FiloInstallBind $address '') -eq $address) 'Explicit supported public bind is admitted'
+        Assert ((Get-FiloInstallBind '' $address) -eq $address) 'Reinstall preserves a supported existing bind'
+    }
+    Assert ((Get-FiloInstallBind '0.0.0.0' '100.64.1.2') -eq '0.0.0.0') 'Explicit wildcard choice overrides the installed bind'
+    foreach ($address in @('0.0.0.00','127.1','100.064.1.2','100.64.999.1','192.168.1.2','::','localhost')) {
+        Rejects { Get-FiloInstallBind $address '' }
+    }
     $endpointState=Join-Path $fixture 'endpoint-state'
     New-Item -ItemType Directory -Path $endpointState | Out-Null
     $defaults=Get-FiloHelperEndpoints $endpointState
@@ -68,7 +78,18 @@ try {
     Assert ($token -match '^[0-9a-f]{64}$') 'Strong token format'
     New-FiloToken $tokenPath
     Assert ([IO.File]::ReadAllText($tokenPath) -eq $token) 'Update must preserve token'
+    $tokenOutput=@(Show-FiloAccessToken $tokenPath)
+    Assert ($tokenOutput.Count -eq 1 -and $tokenOutput[0] -ceq ('Access token: '+$token)) 'Non-interactive redirected output includes the installed public token once'
+    $savedSshConnection=$env:SSH_CONNECTION
+    try {
+        $env:SSH_CONNECTION='fixture remote connection'
+        $remoteOutput=@(Show-FiloAccessToken $tokenPath)
+        Assert ($remoteOutput.Count -eq 1 -and $remoteOutput[0] -ceq $tokenOutput[0]) 'SSH installation prints the same installed token'
+    } finally { $env:SSH_CONNECTION=$savedSshConnection }
     [IO.File]::WriteAllText($tokenPath,'broken')
+    $malformedOutput=[Collections.Generic.List[string]]::new()
+    Rejects { Show-FiloAccessToken $tokenPath | ForEach-Object { $malformedOutput.Add([string]$_) } }
+    Assert ($malformedOutput.Count -eq 0) 'Malformed token is never displayed'
     Rejects { New-FiloToken $tokenPath }
     Assert ([IO.File]::ReadAllText($tokenPath) -eq 'broken') 'Invalid prior token must remain unchanged'
     # Cover inherited host permissions and the protected state used by production.
@@ -107,7 +128,7 @@ try {
         'scripts\windows\Uninstall-Transaction.ps1','scripts\windows\Service-State.ps1',
         'scripts\windows\Run-Standalone.ps1','scripts\windows\Worker-Update.ps1','tools\nssm.exe','tools\FiloBackground.exe',
         'scripts\windows\Source-Selection.ps1','internal\claude\mod\.claude-plugin\plugin.json',
-        'internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
+        'internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js','internal\claude\mod\hooks\desktop.mjs')) {
         $file = Join-Path $bundle $relative
         New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
         [IO.File]::WriteAllText($file,'fixture - never executed')

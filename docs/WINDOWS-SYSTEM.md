@@ -8,10 +8,23 @@ sources never create additional public servers or budgets.
 Installed executables use `C:\Program Files\Filo\bin`, registered once in machine
 PATH. Service configuration, tokens and logs use `C:\ProgramData\Filo\service`;
 selected-account state and its fixed native runtime copy use
-`C:\ProgramData\Filo\agents\<SID>`. Installation removes earlier layouts without
-migration and verifies both worker and encrypted public readiness. Uninstall
+`C:\ProgramData\Filo\agents\<SID>`. Installation retains the existing public
+access token through earlier-layout cleanup, failures and retries. Invalid public
+tokens abort before interruption and remain unchanged; only an absent token is
+generated. Other earlier-layout configuration and private credentials are not
+migrated. Installation verifies worker and encrypted public readiness. Uninstall
 removes those directories and the owned service, tasks, firewall and PATH entry.
 See [the installer contract](windows-installer.md) for shutdown and failure behavior.
+
+The public gateway admits `0.0.0.0`, `127.0.0.1` or an explicit tailnet IPv4 bind.
+New installs default to all IPv4 interfaces; fixed-layout reinstalls keep their
+configured bind unless explicitly overridden. Wildcard readiness uses encrypted
+loopback requests. Its managed inbound firewall rule remains limited to tailnet
+peers. Private workers, native helpers and the Claude bridge remain authenticated
+loopback listeners. Successful installation prints the public access token to
+normal PowerShell output after readiness, including SSH, redirected and
+non-interactive runs. Failed or non-install operations do not print the token.
+Automation must redact the token before retaining installer output.
 
 ## Selected sources and identity
 

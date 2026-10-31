@@ -21,6 +21,13 @@ function Invoke-FiloInstall {
         throw 'Run installation from an extracted bundle outside the installed program and data directories'
     }
     # Complete integrity, component ownership and endpoint preflight before stopping.
+    $safeState=Assert-FiloPrivatePath $State $Root
+    if ((Split-Path -Parent $safeState).TrimEnd('\') -ine [IO.Path]::GetFullPath($Root).TrimEnd('\')) {
+        throw 'Public Filo state must be a direct child of its data directory'
+    }
+    $publicTokenPath=Assert-FiloPrivatePath (Join-Path $safeState 'token') $Root
+    # Validate existing credentials before interruption, without creating new ones.
+    if (Test-Path -LiteralPath $publicTokenPath) { New-FiloToken $publicTokenPath }
     $endpoints=Get-FiloHelperEndpoints $Worker -IgnoreExisting:$fresh
     $nativeUrl=if ($hasDesktop) { $endpoints.NativeUrl } else { '' }
     if ($hasDesktop -and -not $nativeUrl) { $nativeUrl='ws://127.0.0.1:7436' }
@@ -41,7 +48,18 @@ function Invoke-FiloInstall {
         }
         if (Test-Path -LiteralPath $Root) {
             $safe=Assert-FiloPrivatePath $Root (Split-Path -Parent $Root)
-            Remove-Item -LiteralPath $safe -Recurse -Force
+            # Keep the public credential in place even if cleanup or replacement
+            # fails. No copy, regeneration or in-memory-only backup is needed.
+            foreach ($entry in @(Get-ChildItem -LiteralPath $safe -Force)) {
+                if ($entry.FullName -ieq $safeState) { continue }
+                Remove-Item -LiteralPath $entry.FullName -Recurse -Force
+            }
+            if (Test-Path -LiteralPath $safeState) {
+                foreach ($entry in @(Get-ChildItem -LiteralPath $safeState -Force)) {
+                    if ($entry.FullName -ieq $publicTokenPath) { continue }
+                    Remove-Item -LiteralPath $entry.FullName -Recurse -Force
+                }
+            }
         }
         $componentPlan=New-FiloClaudeComponentPlan $Bundle $Worker $Client.Profile $Client.Sid $SourceOptions.Sources
     }
@@ -99,15 +117,18 @@ function Invoke-FiloInstall {
         Wait-FiloEndpoint $endpoints.WorkerUrl (Join-Path $Worker 'token') $mode -Seconds 45
         & (Join-Path $runtime 'scripts\system-service.ps1') -Action Install -RuntimeDirectory $runtime -StateDirectory $State -FiloPath $filo -WrapperPath $wrapper
         if ($Bind -ne '127.0.0.1') {
+            $firewallAddress=if ($Bind -eq '0.0.0.0') { 'Any' } else { $Bind }
             New-NetFirewallRule -Name 'Filo-Remote' -DisplayName 'Filo Remote' -Group 'Filo' -Direction Inbound `
-                -Action Allow -Protocol TCP -LocalAddress $Bind -LocalPort $Port -RemoteAddress '100.64.0.0/10' `
+                -Action Allow -Protocol TCP -LocalAddress $firewallAddress -LocalPort $Port -RemoteAddress '100.64.0.0/10' `
                 -Program $filo -Profile Any | Out-Null
         }
         Write-Host '4/4  Verify authenticated readiness and fixed entrypoint' -ForegroundColor Cyan
-        Wait-FiloEndpoint ("http://${Bind}:$Port") (Join-Path $State 'token') $publicMode -FiloPath $filo
+        $probeBind=if ($Bind -eq '0.0.0.0') { '127.0.0.1' } else { $Bind }
+        Wait-FiloEndpoint ("http://${probeBind}:$Port") (Join-Path $State 'token') $publicMode -FiloPath $filo
         if (-not (Test-Path -LiteralPath $filo -PathType Leaf)) { throw 'Fixed Filo entrypoint is missing' }
         Write-Output "Filo installed for $($Client.Name): http://${Bind}:$Port"
         Write-Output "Command: $filo. Access token file: $State\token. Sources: $($SourceOptions.Sources -join ', ')."
+        Show-FiloAccessToken (Join-Path $State 'token')
     } catch {
         $failure=$_
         # An in-place replacement cannot roll back to a hash directory. Leave one

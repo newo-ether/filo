@@ -135,15 +135,12 @@ function Remove-FiloUserTask {
 
 function Get-FiloInstallBind {
     param([string]$Requested,[string]$Existing)
-    $address=if ($Requested) { $Requested } elseif ($Existing) { $Existing } else {
-        $tailnet=@(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
-            $_.IPAddress -match '^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.' })
-        if ($tailnet.Count -eq 1) { $tailnet[0].IPAddress } else { '127.0.0.1' }
-    }
+    $address=if ($Requested) { $Requested } elseif ($Existing) { $Existing } else { '0.0.0.0' }
     $parsed=$null
     if (-not [Net.IPAddress]::TryParse($address,[ref]$parsed) -or
-        $address -notmatch '^(127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})$') {
-        throw 'Filo bind must be loopback or the device tailnet IPv4 address'
+        $address -cne $parsed.ToString() -or
+        $address -notmatch '^(0\.0\.0\.0|127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})$') {
+        throw 'Filo bind must be 0.0.0.0, loopback or a tailnet IPv4 address'
     }
     $address
 }

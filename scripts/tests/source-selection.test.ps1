@@ -48,7 +48,7 @@ try {
     Write-FiloJson (Join-Path $fixture 'launch.json') @{sources=@('codex-cli');appServerUrl='ws://127.0.0.1:7436'}
     Rejects { Get-FiloHelperEndpoints $fixture }
     $build=Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\build-windows.ps1') -Raw
-    foreach ($relative in @('scripts\windows\Source-Selection.ps1','scripts\windows\Claude-Components.ps1','internal\claude\mod\.claude-plugin\plugin.json','internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
+    foreach ($relative in @('scripts\windows\Source-Selection.ps1','scripts\windows\Claude-Components.ps1','internal\claude\mod\.claude-plugin\plugin.json','internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js','internal\claude\mod\hooks\desktop.mjs')) {
         Assert ($build.Contains($relative)) ('Bundle explicitly includes '+$relative)
     }
     'PASS: bounded four-source configuration, legacy/default preservation, endpoint collisions and automatic component bundle payload'

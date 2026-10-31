@@ -22,6 +22,7 @@ try {
     $payload = @{
         '.claude-plugin\plugin.json' = '{"name":"filo-observer","version":"fixture"}'
         'hooks\hooks.json' = '{"modules":["./register.js"]}'
+        'hooks\desktop.mjs' = '// fixture diagnostic module; never loaded'
         'hooks\register.js' = '// fixture module; never loaded'
     }
     foreach ($relative in $payload.Keys) {
@@ -159,7 +160,57 @@ try {
         }
     }
     $robustnessCases = 0
-    foreach ($relative in @('.claude-plugin\plugin.json', 'hooks\hooks.json', 'hooks\register.js')) {
+    function New-LegacyComponentFixture([string]$Name) {
+        $value = New-ComponentFixture $Name -Installed
+        $record = [IO.File]::ReadAllText($value.Plan.Receipt) | ConvertFrom-Json
+        $record.files = @($record.files | Where-Object { $_.path -cne 'hooks\desktop.mjs' })
+        Assert ($record.files.Count -eq 4) 'Legacy receipt retains the original four paths and hashes'
+        $bytes = ConvertTo-FiloClaudeComponentBytes $record
+        [IO.File]::WriteAllBytes($value.Plan.Receipt, $bytes)
+        [IO.File]::WriteAllBytes($value.Plan.Marker, $bytes)
+        Remove-Item -LiteralPath (Join-Path $value.Root 'hooks\desktop.mjs') -Force
+        return $value
+    }
+    $case = New-LegacyComponentFixture 'legacy-four-file-upgrade'
+    $snapshot = Get-ComponentFixtureSnapshot $case
+    $migration = New-FiloClaudeComponentPlan $bundle $case.Worker $case.Profile $owner @('claude-desktop')
+    Install-FiloClaudeComponents $migration
+    $record = [IO.File]::ReadAllText($migration.Receipt) | ConvertFrom-Json
+    Assert (@($record.files).Count -eq 5) 'Legacy upgrade writes the complete five-file ownership receipt'
+    $installedModule = [IO.File]::ReadAllBytes((Join-Path $case.Root 'hooks\desktop.mjs'))
+    $bundleModule = [IO.File]::ReadAllBytes((Join-Path $source 'hooks\desktop.mjs'))
+    Assert (Test-FiloClaudeComponentBytes $installedModule $bundleModule) 'Legacy upgrade copies the exact new module bytes'
+    Restore-FiloClaudeComponents $migration
+    Assert-ComponentFixtureSnapshot $case $snapshot 'Legacy upgrade rollback restores the exact four-file installation'
+    $migration = New-FiloClaudeComponentPlan $bundle $case.Worker $case.Profile $owner @('claude-desktop')
+    Install-FiloClaudeComponents $migration
+    Remove-FiloClaudeComponents $case.Worker $owner
+    Assert (-not (Test-Path -LiteralPath $case.Root)) 'Upgraded legacy installation uninstalls the new module too'
+    $case = New-LegacyComponentFixture 'legacy-four-file-removal'
+    Remove-FiloClaudeComponents $case.Worker $owner
+    Assert (-not (Test-Path -LiteralPath $case.Root)) 'Legacy receipt can be removed without a prior upgrade'
+    $case = New-LegacyComponentFixture 'legacy-unmanaged-module'
+    [IO.File]::WriteAllText((Join-Path $case.Root 'hooks\desktop.mjs'), 'unmanaged user module')
+    $snapshot = Get-ComponentFixtureSnapshot $case
+    Rejects { New-FiloClaudeComponentPlan $bundle $case.Worker $case.Profile $owner @('claude-desktop') }
+    Rejects { Remove-FiloClaudeComponents $case.Worker $owner }
+    Assert-ComponentFixtureSnapshot $case $snapshot 'Legacy receipts cannot overwrite or remove an unowned module'
+    foreach ($destination in @('hooks\desktop.mjs', 'hooks\register.js', '.claude-plugin\plugin.json', '.filo-owner.json', 'receipt')) {
+        $robustnessCases++
+        $case = New-LegacyComponentFixture ('legacy-interrupted-' + $robustnessCases)
+        $snapshot = Get-ComponentFixtureSnapshot $case
+        $migration = New-FiloClaudeComponentPlan $bundle $case.Worker $case.Profile $owner @('claude-desktop')
+        $script:failAt = if ($destination -eq 'receipt') { $migration.Receipt } else { Join-Path $case.Root $destination }
+        function Set-FiloClaudeComponentBytes([string]$Path, $Bytes) {
+            if ($Path -eq $script:failAt) { throw 'fixture interrupted legacy migration' }
+            & $script:realWrite $Path $Bytes
+        }
+        try { Rejects { Install-FiloClaudeComponents $migration } }
+        finally { ${function:Set-FiloClaudeComponentBytes} = $script:realWrite }
+        Restore-FiloClaudeComponents $migration
+        Assert-ComponentFixtureSnapshot $case $snapshot 'Interrupted legacy migration restores exact prior bytes'
+    }
+    foreach ($relative in @('.claude-plugin\plugin.json', 'hooks\hooks.json', 'hooks\register.js', 'hooks\desktop.mjs')) {
         $robustnessCases++
         $case = New-ComponentFixture ('missing-source-' + $robustnessCases) -Installed
         $snapshot = Get-ComponentFixtureSnapshot $case
@@ -171,7 +222,7 @@ try {
             Assert-ComponentFixtureSnapshot $case $snapshot 'Missing bundle payload is refused before mutation'
         } finally { [IO.File]::WriteAllBytes($path, $sourceBytes) }
     }
-    foreach ($relative in @('.claude-plugin\plugin.json', 'hooks\hooks.json', 'hooks\register.js', 'filo-config.json')) {
+    foreach ($relative in @('.claude-plugin\plugin.json', 'hooks\hooks.json', 'hooks\register.js', 'filo-config.json', 'hooks\desktop.mjs')) {
         foreach ($damage in @('missing', 'corrupt')) {
             $robustnessCases++
             $case = New-ComponentFixture ('managed-damage-' + $robustnessCases) -Installed
@@ -259,7 +310,7 @@ try {
         [IO.File]::SetLastWriteTimeUtc($sourceModule, $sourceTime)
     }
     foreach ($installed in @($false, $true)) {
-        foreach ($destination in @('filo-config.json', 'hooks\hooks.json', 'hooks\register.js', '.claude-plugin\plugin.json', '.filo-owner.json', 'receipt')) {
+        foreach ($destination in @('filo-config.json', 'hooks\hooks.json', 'hooks\desktop.mjs', 'hooks\register.js', '.claude-plugin\plugin.json', '.filo-owner.json', 'receipt')) {
             $robustnessCases++
             $case = New-ComponentFixture ('interrupted-' + $robustnessCases) -Installed:$installed
             $snapshot = Get-ComponentFixtureSnapshot $case

@@ -28,7 +28,7 @@ function Get-FiloWorkerState { Join-Path $global:FiloEntryRoot 'worker' }
 function Get-FiloSourceOptions { param($Worker,$Sources,$Socket,$SocketSpecified,$BridgePort,$BridgeSpecified,$PublicPort) [pscustomobject]@{Sources=$Sources;CodexDaemonSocket='';ClaudeBridgePort=7438} }
 '@)
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\windows\Source-Selection.ps1') -Destination (Join-Path $modules 'Source-Selection-real.ps1')
-    [IO.File]::WriteAllText((Join-Path $modules 'Installer-Tasks.ps1'),"function Get-FiloInstallBind { '127.0.0.1' }")
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '..\windows\Installer-Tasks.ps1') -Destination $modules
     foreach($name in @('Worker-Update','Host-Lifecycle','Uninstall-Transaction')) {
         [IO.File]::WriteAllText((Join-Path $modules ($name+'.ps1')), '# No OS interaction in entry fixture')
     }
@@ -68,6 +68,9 @@ function Get-FiloSourceOptions { param($Worker,$Sources,$Socket,$SocketSpecified
     $global:FiloEntryClients=@()
     $preserved=& (Join-Path $fixture 'Install-Filo.ps1') -ValidateOnly
     Assert (($preserved.Sources -join ',') -eq 'codex-cli,claude-code') 'Upgrade without source options preserves saved sources even while native clients are unavailable'
+    Assert ($preserved.Bind -eq '127.0.0.1') 'Default upgrade preserves the existing public bind'
+    $wildcard=& (Join-Path $fixture 'Install-Filo.ps1') -ValidateOnly -Bind '0.0.0.0'
+    Assert ($wildcard.Bind -eq '0.0.0.0') 'Packaged entry forwards an explicit wildcard bind through normal upgrade validation'
     Remove-Item -LiteralPath (Join-Path $statePath 'config.json')
     'PASS: real installer entry handles zero/one sources, validation and saved-source upgrade preservation'
 } finally {

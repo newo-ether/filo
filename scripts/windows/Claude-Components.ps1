@@ -48,7 +48,8 @@ function New-FiloClaudeComponentPlan {
     $root = Assert-FiloClaudeComponentPath (Join-Path $profilePath '.claude\skills\filo-observer')
     $receipt = Join-Path $workerPath 'claude-components.json'
     $marker = Join-Path $root '.filo-owner.json'
-    $relativeFiles = @('.claude-plugin\plugin.json', 'hooks\hooks.json', 'hooks\register.js', 'filo-config.json')
+    $legacyFiles = @('.claude-plugin\plugin.json', 'hooks\hooks.json', 'hooks\register.js', 'filo-config.json')
+    $relativeFiles = @('.claude-plugin\plugin.json', 'hooks\hooks.json', 'hooks\register.js', 'filo-config.json', 'hooks\desktop.mjs')
     $snapshots = @{}
     $snapshots[$receipt] = Read-FiloClaudeComponentBytes $receipt 8192
     $markerBytes = Read-FiloClaudeComponentBytes $marker 8192
@@ -74,23 +75,27 @@ function New-FiloClaudeComponentPlan {
             $workerMatches=$workerMatches -or $record.worker -ieq (Join-Path $profilePath 'AppData\Local\FiloStandalone') -or
                 $record.worker -ieq (Join-Path $profilePath 'AppData\Local\Filo')
         }
+        $recordFiles = if (@($record.files).Count -eq $legacyFiles.Count) { $legacyFiles } else { $relativeFiles }
         if ($record.schema -ne 1 -or $record.owner -cne 'filo-claude-observer' -or $record.sid -cne $Sid -or
             $record.profile -ine $profilePath -or -not $workerMatches -or $record.pluginRoot -ine $root -or
             -not (Test-FiloClaudeComponentBytes $recordBytes $markerBytes) -or
-            @($record.files).Count -ne $relativeFiles.Count) { throw 'Claude component ownership receipt does not match; existing files were preserved' }
-        for ($i = 0; $i -lt $relativeFiles.Count; $i++) {
-            $bytes = $snapshots[(Join-Path $root $relativeFiles[$i])]
-            if ($record.files[$i].path -cne $relativeFiles[$i] -or $null -eq $bytes -or
+            @($record.files).Count -ne $recordFiles.Count) { throw 'Claude component ownership receipt does not match; existing files were preserved' }
+        for ($i = 0; $i -lt $recordFiles.Count; $i++) {
+            $bytes = $snapshots[(Join-Path $root $recordFiles[$i])]
+            if ($record.files[$i].path -cne $recordFiles[$i] -or $null -eq $bytes -or
                 $record.files[$i].sha256 -cne (Get-FiloClaudeComponentHash $bytes)) {
                 throw 'A managed Claude component was changed; existing files were preserved'
             }
+        }
+        if ($recordFiles.Count -eq $legacyFiles.Count -and $null -ne $snapshots[(Join-Path $root 'hooks\desktop.mjs')]) {
+            throw 'An unmanaged Claude module already exists; existing files were preserved'
         }
     } elseif (Test-Path -LiteralPath $root) {
         throw 'The Claude observer directory is not owned by Filo; existing files were preserved'
     }
     if ($selected.Count) {
         $source = Join-Path (Assert-FiloClaudeComponentPath $Bundle) 'internal\claude\mod'
-        foreach ($relative in $relativeFiles[0..2]) {
+        foreach ($relative in @($relativeFiles | Where-Object { $_ -ne 'filo-config.json' })) {
             $bytes = Read-FiloClaudeComponentBytes (Join-Path $source $relative)
             if ($null -eq $bytes) { throw 'Bundle is missing the Claude Mod payload' }
             $plan.Payload[$relative] = $bytes
@@ -186,7 +191,7 @@ function Install-FiloClaudeComponents {
             worker=$Plan.Worker; pluginRoot=$Plan.Root; files=$fileRecords
         })
         # Publish the manifest last so a fresh session never discovers an incomplete new plugin.
-        foreach ($relative in @('filo-config.json', 'hooks\hooks.json', 'hooks\register.js', '.claude-plugin\plugin.json')) {
+        foreach ($relative in @('filo-config.json', 'hooks\hooks.json', 'hooks\desktop.mjs', 'hooks\register.js', '.claude-plugin\plugin.json')) {
             $path = Join-Path $Plan.Root $relative
             Write-FiloClaudeComponentBytes $Plan $path $Plan.Payload[$relative]
         }

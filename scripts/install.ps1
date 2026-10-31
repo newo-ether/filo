@@ -61,7 +61,7 @@ if ($admin) {
     $state=Assert-FiloPrivatePath (Join-Path $root 'service') $root
     $configPath=Join-Path $state 'config.json'
     $existing=if (Test-Path -LiteralPath $configPath) { Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json } else { $null }
-    # Old layouts are deleted, never adopted as an upgrade/migration source.
+    # Old configuration is not adopted; the transaction retains its public token.
     if ($existing -and (-not $existing.PSObject.Properties['layoutVersion'] -or $existing.layoutVersion -ne 1)) { $existing=$null }
 }
 

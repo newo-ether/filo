@@ -50,14 +50,16 @@ function Stop-Gateway {
 function Wait-GatewayReady {
     param([double]$Seconds = 25)
     $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    $probeBind=if ($config.bind -eq '0.0.0.0') { '127.0.0.1' } else { $config.bind }
+    $probeUrl="http://${probeBind}:$($config.port)"
     do {
         try {
             if ($Action -eq 'Restore' -and [IO.Path]::GetFileName($RestoreApplication) -ne 'filo.exe') {
                 # Only a recorded pre-Go rollback uses its original private protocol.
-                $reply = Invoke-RestMethod -Uri ("http://$($config.bind):$($config.port)/v1/info") -Headers @{Authorization="Bearer $token"} -TimeoutSec 2 -DisableKeepAlive
+                $reply = Invoke-RestMethod -Uri ($probeUrl + '/v1/info') -Headers @{Authorization="Bearer $token"} -TimeoutSec 2 -DisableKeepAlive
             } else {
                 $probeBinary = if ($Action -eq 'Restore') { $RestoreApplication } else { $FiloPath }
-                $response = & $probeBinary request -url ("http://$($config.bind):$($config.port)") -token-file (Join-Path $statePath 'token') -timeout 2s | Out-String
+                $response = & $probeBinary request -url $probeUrl -token-file (Join-Path $statePath 'token') -timeout 2s | Out-String
                 if ($LASTEXITCODE -ne 0) { throw 'Encrypted gateway readiness failed' }
                 $reply = ($response -join "`n") | ConvertFrom-Json
             }
@@ -133,7 +135,7 @@ foreach ($path in @($entry, $WrapperPath, (Join-Path $statePath 'config.json'), 
 $config = Get-Content -LiteralPath (Join-Path $statePath 'config.json') -Raw | ConvertFrom-Json
 $token = [IO.File]::ReadAllText((Join-Path $statePath 'token')).Trim()
 if ($token -notmatch '^[0-9a-fA-F]{64}$' -or $config.workerUrl -notmatch '^http://127\.0\.0\.1:[0-9]+$' -or
-    $config.bind -notmatch '^(127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})$' -or
+    $config.bind -notmatch '^(0\.0\.0\.0|127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})$' -or
     $config.port -lt 1024 -or $config.port -gt 65535) { throw 'Invalid private Filo configuration' }
 # The staged release must run as the binary it claims to be. The manifest hashes
 # already verified it; this refuses a truncated or foreign file that happens to

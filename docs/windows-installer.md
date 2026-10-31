@@ -50,8 +50,18 @@ Codex Desktop only.
 Run the same command to upgrade. When `-Clients` is omitted, a fixed-layout
 installation retains its configured sources and account even when a native client
 is temporarily unavailable. Pass an explicit `-Clients` list to change sources.
-Fixed-layout public and private tokens and endpoint settings are retained. Earlier
-layouts are stopped and removed, without migrating their configuration or secrets.
+The existing public access token is retained across both fixed-layout updates and
+earlier-layout migration, including interrupted installs and retries. An invalid
+existing public token aborts before services stop and is left unchanged. A token
+is generated only when no public token exists. Fixed-layout private tokens and
+endpoint settings are retained unless explicit endpoint options override them.
+Earlier layouts are stopped and removed without migrating other configuration or
+private credentials.
+After worker readiness, encrypted public readiness and the fixed entrypoint are
+verified, installation prints `Access token: <value>` to normal PowerShell output,
+including SSH, non-interactive and redirected invocations. Failed, cancelled,
+validation, discovery and uninstall runs never print the token. Automation that
+retains installer output must redact the token before writing logs.
 
 Latest resolution follows GitHub's official release redirect without an API token.
 Once resolved, checksums and ZIP use the same version. HTTPS authenticates the
@@ -84,9 +94,14 @@ opened PowerShell can run `filo`. Scripts and the integrity manifest live under
 `C:\Program Files\Filo`; there are no installed hash/version directories.
 
 The default public address preserves a fixed-layout installation's prior value;
-for a new installation it uses the sole tailnet IPv4 address or loopback when
-ambiguous. `-Bind` and `-Port` choose an allowed endpoint. Public configuration,
-token and logs live under `C:\ProgramData\Filo\service`. Worker state, logs and
+new installations bind `0.0.0.0` (all IPv4 interfaces). Pass `-Bind 0.0.0.0` to
+change an existing installation in the same run, or select `127.0.0.1` or a tailnet
+IPv4 address with `-Bind`. `-Port` selects the public port. Readiness for a wildcard
+bind is checked through `127.0.0.1` using the encrypted public protocol. The managed
+firewall rule still permits only tailnet peers (`100.64.0.0/10`); wildcard binding
+does not add a general LAN/Internet allow rule. Use a reachable device address in
+Agora, never `0.0.0.0`. Public configuration, token and logs live under
+`C:\ProgramData\Filo\service`. Worker state, logs and
 the single unchanged Desktop runtime copy live under
 `C:\ProgramData\Filo\agents\<SID>`. Old release/candidate/backup directories and
 `%LOCALAPPDATA%\Filo` / `FiloStandalone` are deleted, never migrated.
@@ -170,8 +185,19 @@ session has reloaded them; the installer never restarts a native client.
 The native surface roster lists current attachments,
 not launch origin. Mixed terminal/Desktop attachments are rejected for source
 attribution rather than giving either source priority.
-The Mod reports native `session.append` UUIDs after registration, with bounded
-observation and no pre-registration transcript. Independently admitted Stop requires
+The Mod reports native `session.append` UUIDs after registration. Source-bound
+lifecycle transcript metadata additionally permits bounded read-only pages of older
+native text, thinking and tool calls. Desktop registrations that missed the lifecycle
+event may discover the same file using the exact persisted host/engine mapping and
+one unique engine-UUID JSONL under the selected native projects store. This bounded
+read-only lookup grants no runtime state or control. Text/thinking keep UUIDs; tools keep native
+tool-use IDs and join only qualified matching user results, without inventing turns
+or emitting separate result rows. Thinking/tools require activity-enabled reads.
+Each source page scans at most 8 MiB / emits at most 128 rows and 3 MiB; matching
+may inspect one additional 8 MiB newer window within its signed fixed snapshot.
+Out-of-window or ambiguous results leave unknown tool state. An unavailable
+transcript leaves initial live reads usable; older cursors fail explicitly and
+later appends do not change their tool results. Independently admitted Stop requires
 one command result and same-turn native completion. Original idle Send uses native
 prompt submission; running Insert appends a native user-role note for subsequent
 requests. Both use explicitly non-exact submitted/observed confirmation and block
@@ -231,7 +257,8 @@ checks authenticated worker readiness and encrypted public readiness. Task
 registration uses a hidden native Task Scheduler helper with a 20-second deadline.
 A failed run stops Filo resources and exits with a precise error; it does not claim
 to restore an earlier binary. Repeating a successful run keeps one installed
-version and the fixed-layout access token. Accepted native work and original
+version and the existing public access token, including earlier-layout migration.
+Accepted native work and original
 Desktop/backend processes remain outside generic cleanup.
 
 Fixture passes establish script behavior, not real installation or native API

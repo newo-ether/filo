@@ -78,7 +78,7 @@ function Get-FiloBundle {
         'scripts\windows\Uninstall-Transaction.ps1','scripts\windows\Service-State.ps1',
         'scripts\windows\Run-Standalone.ps1','scripts\windows\Worker-Update.ps1','tools\nssm.exe','tools\FiloBackground.exe',
         'scripts\windows\Source-Selection.ps1','internal\claude\mod\.claude-plugin\plugin.json',
-        'internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js')) {
+        'internal\claude\mod\hooks\hooks.json','internal\claude\mod\hooks\register.js','internal\claude\mod\hooks\desktop.mjs')) {
         if (-not $seen.ContainsKey([IO.Path]::GetFullPath((Join-Path $base $required)))) { throw "Incomplete bundle: $required" }
     }
     return $manifest
@@ -123,6 +123,12 @@ function New-FiloToken {
     $random = [Security.Cryptography.RandomNumberGenerator]::Create()
     try { $random.GetBytes($bytes) } finally { $random.Dispose() }
     [IO.File]::WriteAllText($Path, ([BitConverter]::ToString($bytes)).Replace('-','').ToLowerInvariant())
+}
+function Show-FiloAccessToken {
+    param([string]$TokenPath)
+    $accessToken=[IO.File]::ReadAllText($TokenPath).Trim()
+    if ($accessToken -notmatch '^[0-9a-fA-F]{64}$') { throw 'Installed Filo access token is invalid' }
+    Write-Output ('Access token: ' + $accessToken)
 }
 function Wait-FiloEndpoint {
     param([string]$Url, [string]$TokenPath, [string]$Mode, [int]$Seconds=30, [string]$FiloPath)

@@ -9,10 +9,13 @@ The staged-binary self check refuses a runtime whose bin\filo.exe cannot answer
 written. A readiness failure with a valid binary (a bound port, a missing privilege)
 is covered by the transaction fixtures with a stub installer instead, because
 provoking it here would need a second compiled binary to serve as the bad payload.
+The -ValidateOnly mode exercises the actual system-service.ps1 configuration
+admission and entrypoint probe, without registering or starting any service.
 #>
 param(
     [Parameter(Mandatory=$true)][string]$FiloPath,
-    [Parameter(Mandatory=$true)][string]$WrapperPath
+    [Parameter(Mandatory=$true)][string]$WrapperPath,
+    [switch]$ValidateOnly
 )
 $ErrorActionPreference='Stop'
 $WrapperPath=(Get-Item -LiteralPath $WrapperPath).FullName
@@ -46,6 +49,40 @@ try {
     Copy-Item -LiteralPath $FiloPath -Destination $entry
     [IO.File]::WriteAllText((Join-Path $bad 'bin\filo.exe'), 'not a Filo entrypoint')
     $common = @{StateDirectory=$state;WrapperPath=$WrapperPath;ServiceName=$name}
+    # Invoke the production entrypoint rather than extracting or copying its
+    # validation rules. These calls must not reach any service mutation.
+    $configuration=Get-Content -LiteralPath (Join-Path $state 'config.json') -Raw | ConvertFrom-Json
+    foreach ($publicBind in @('0.0.0.0','127.0.0.1','100.64.1.2')) {
+        $configuration.bind=$publicBind
+        Write-FiloJson (Join-Path $state 'config.json') $configuration
+        $validation=@(& $installer @common -Action ValidateOnly -RuntimeDirectory $good)
+        if ($validation.Count -ne 1 -or $validation[0] -cne 'Filo SYSTEM prerequisites validated; no service mutation') {
+            throw 'Supported public bind did not complete actual service validation'
+        }
+    }
+    foreach ($invalid in @(
+        @{bind='not-an-address';workerUrl='http://127.0.0.1:7437'},
+        @{bind='0.0.0.00';workerUrl='http://127.0.0.1:7437'},
+        @{bind='192.168.1.2';workerUrl='http://127.0.0.1:7437'},
+        @{bind='0.0.0.0';workerUrl='not-a-url'},
+        @{bind='0.0.0.0';workerUrl='http://0.0.0.0:7437'},
+        @{bind='0.0.0.0';workerUrl='http://100.64.1.2:7437'},
+        @{bind='0.0.0.0';workerUrl='http://localhost:7437'}
+    )) {
+        $configuration.bind=$invalid.bind; $configuration.workerUrl=$invalid.workerUrl
+        Write-FiloJson (Join-Path $state 'config.json') $configuration
+        $rejected=$false
+        try { & $installer @common -Action ValidateOnly -RuntimeDirectory $good | Out-Null }
+        catch { $rejected=$_.Exception.Message -eq 'Invalid private Filo configuration' }
+        if (-not $rejected) { throw 'Actual service validation must reject malformed public or nonprivate worker endpoints' }
+    }
+    if (Get-Service -Name $name -ErrorAction SilentlyContinue) { throw 'ValidateOnly created a service registration' }
+    $afterValidation=Get-CimInstance Win32_Service -Filter "Name='Filo'" | Select-Object Name,ProcessId,StartName,State,PathName
+    if (($before|ConvertTo-Json -Compress) -ne ($afterValidation|ConvertTo-Json -Compress)) { throw 'ValidateOnly changed the live Filo service' }
+    Write-Output 'PASS: actual SYSTEM ValidateOnly accepts wildcard and refuses malformed public or nonprivate worker endpoints without service mutation'
+    if ($ValidateOnly) { return }
+    $configuration.bind='127.0.0.1'; $configuration.workerUrl='http://127.0.0.1:7437'
+    Write-FiloJson (Join-Path $state 'config.json') $configuration
     $failed = $false
     try { & $installer @common -Action Install -RuntimeDirectory $bad } catch { $failed = $true }
     if (-not $failed -or (Get-Service -Name $name -ErrorAction SilentlyContinue)) { throw 'Failed first install left a service registration' }
