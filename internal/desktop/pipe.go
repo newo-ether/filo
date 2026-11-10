@@ -6,8 +6,6 @@ import (
 	"strings"
 )
 
-const DefaultPipePath = `\\.\pipe\codex-ipc`
-
 // VerifyPipePeer must verify the selected account, interactive session and
 // registered original application. It runs against the actual connected peer,
 // before any IPC initialization or task data is written.

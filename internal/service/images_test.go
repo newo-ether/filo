@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -31,7 +32,7 @@ func pngBytes(t *testing.T) []byte {
 // the percent characters of the literal name still encoded.
 func fileURL(t *testing.T, path string) string {
 	t.Helper()
-	parsed := url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(path)}
+	parsed := url.URL{Scheme: "file", Path: fileURLPath(path)}
 	return parsed.String()
 }
 
@@ -87,7 +88,7 @@ func TestLocalImagePathAcceptsOnlyLocalAbsolutePaths(t *testing.T) {
 	// A literal path keeps its percent characters; only URI and Markdown
 	// destinations are decoded.
 	decoded := filepath.Join(filepath.Dir(local), "\u4e2d\u6587  image.png")
-	localhost := (&url.URL{Scheme: "file", Host: "localhost", Path: "/" + filepath.ToSlash(local)}).String()
+	localhost := (&url.URL{Scheme: "file", Host: "localhost", Path: fileURLPath(local)}).String()
 	cases := []struct {
 		name   string
 		link   string
@@ -110,6 +111,9 @@ func TestLocalImagePathAcceptsOnlyLocalAbsolutePaths(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
+			if runtime.GOOS != "windows" && strings.HasPrefix(testCase.name, "escaped") {
+				t.Skip("This fixture checks Windows file URL separator rules")
+			}
 			got, ok := LocalImagePath(testCase.link)
 			if ok != testCase.localB {
 				t.Fatalf("LocalImagePath(%q) local = %v, want %v", testCase.link, ok, testCase.localB)
@@ -122,8 +126,11 @@ func TestLocalImagePathAcceptsOnlyLocalAbsolutePaths(t *testing.T) {
 }
 
 func TestLocalImagePathStripsAUrlStyleDriveSlash(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("This fixture checks Windows drive syntax")
+	}
 	path := filepath.Join(t.TempDir(), "image.png")
-	slashed := "/" + filepath.ToSlash(path)
+	slashed := fileURLPath(path)
 	got, ok := LocalImagePath(slashed)
 	if !ok {
 		t.Fatalf("LocalImagePath(%q) refused a drive-prefixed path", slashed)
@@ -306,4 +313,12 @@ func TestNativeImageLinksResolveMarkdownEntitiesBeforeEncoding(t *testing.T) {
 	if len(links) != 1 || links[0] != encoded {
 		t.Fatalf("unexpected entity link %q", links)
 	}
+}
+
+func fileURLPath(path string) string {
+	path = filepath.ToSlash(path)
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	return path
 }

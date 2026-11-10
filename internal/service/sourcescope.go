@@ -38,7 +38,7 @@ func codexSourceScope(sid string, home func(context.Context) (string, error),
 // Claude with Codex and grants no control capability.
 func isolatedSourceScope(token, sid, source string) (string, error) {
 	key, err := hex.DecodeString(token)
-	if err != nil || len(key) != 32 || !systemServiceSIDPattern.MatchString(sid) {
+	if err != nil || len(key) != 32 || !validSourceIdentity(sid) {
 		return "", errors.New("Private source identity is unavailable")
 	}
 	defer clear(key)

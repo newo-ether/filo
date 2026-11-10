@@ -58,7 +58,7 @@ func testSystemServiceGatewayWithoutDesktop(t *testing.T, bind string) {
 	config := Marshal(map[string]any{
 		"bind":            bind,
 		"port":            port,
-		"desktopSid":      "S-1-5-21-1-2-3-1001",
+		"desktopSid":      testSourceIdentity(),
 		"workerUrl":       "http://127.0.0.1:1",
 		"workerTokenPath": filepath.Join(directory, "not-yet-prepared-token"),
 	})

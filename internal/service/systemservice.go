@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -111,7 +112,7 @@ func serveSystemService(options systemServiceOptions) error {
 	}
 	desktopEnabled := hasConfiguredSource(ids, codexDesktopSource)
 	sid, _ := config["desktopSid"].(string)
-	if !systemServiceSIDPattern.MatchString(sid) {
+	if !validSourceIdentity(sid) {
 		return errors.New(systemServiceSIDRefusal)
 	}
 	token, err := readEntryText(filepath.Join(options.Directory, entryTokenName))
@@ -163,18 +164,21 @@ func serveSystemService(options systemServiceOptions) error {
 		holder := &desktopSurface{}
 		pipePath := options.PipePath
 		if pipePath == "" {
-			pipePath = desktop.DefaultPipePath
+			pipePath, err = desktop.DefaultEndpoint()
+			if err != nil {
+				return err
+			}
 		}
 		client = desktop.NewClient(desktop.Options{
 			Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
 				connection, err := desktop.DialPipe(ctx, pipePath, func(verify context.Context, pid uint32) error {
 					if _, err := windowsapp.Inspect(verify, pid, sid); err != nil {
-						return errors.New(systemServiceDesktopUnavailable)
+						return fmt.Errorf("%s: %w", systemServiceDesktopUnavailable, err)
 					}
 					return nil
 				})
 				if err != nil {
-					return nil, errors.New(systemServiceDesktopUnavailable)
+					return nil, fmt.Errorf("%s: %w", systemServiceDesktopUnavailable, err)
 				}
 				return connection, nil
 			},

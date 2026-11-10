@@ -413,7 +413,7 @@ func nativeProcessEnvironment(executable string) []string {
 		}
 		environment = append(environment, entry)
 	}
-	return append(environment, "PATH="+filepath.Dir(executable)+";"+path)
+	return append(environment, "PATH="+filepath.Dir(executable)+string(os.PathListSeparator)+path)
 }
 
 // endNativeProcess ends this exact owned child immediately. Every caller has
@@ -477,18 +477,6 @@ func reserveExecutorURL() (string, error) {
 
 // resolveDesktopRuntime asks the Windows-provided shell for the installed
 // desktop runtime of the current user.
-func resolveDesktopRuntime() (string, error) {
-	script, err := deploymentPath("scripts", executorDesktopRuntimeScript)
-	if err != nil {
-		return "", err
-	}
-	stdout, err := windowsPowerShell(script, nil, executorDesktopRuntimeTimeout)
-	if err != nil {
-		return "", err
-	}
-	return parseDesktopRuntime(stdout)
-}
-
 // parseDesktopRuntime validates the resolver output: only an absolute
 // executable is a usable runtime.
 func parseDesktopRuntime(stdout string) (string, error) {

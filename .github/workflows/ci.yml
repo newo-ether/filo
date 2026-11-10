@@ -45,3 +45,21 @@ jobs:
 
       - name: Test Windows delivery scripts
         run: .\scripts\run-windows-tests.ps1
+
+  macos:
+    name: macOS checks
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - run: go mod verify
+      - run: go vet ./...
+      - run: go test -count=1 -timeout=180s ./...
+      - run: GOARCH=arm64 go build -o /tmp/filo-arm64 ./cmd/filo
+      - run: GOARCH=amd64 go build -o /tmp/filo-amd64 ./cmd/filo
+      - run: python3 -m py_compile scripts/macos/prepare.py

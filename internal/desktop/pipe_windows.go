@@ -11,6 +11,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+const DefaultPipePath = `\\.\pipe\codex-ipc`
+
 func DialPipe(ctx context.Context, path string, verify VerifyPipePeer) (net.Conn, error) {
 	if err := validatePipe(path, verify); err != nil {
 		return nil, err

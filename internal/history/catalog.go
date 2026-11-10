@@ -53,6 +53,18 @@ func (history *NativeHistory) List(ctx context.Context, cursor string) (protocol
 		return page, err
 	}
 	defer db.Close()
+	// Preserve existing reads for older catalogs without a source column.
+	columns, err := tableColumns(ctx, db, "threads")
+	if err != nil {
+		return page, err
+	}
+	if columns["source"] {
+		// Filter before LIMIT and cursor pagination; titles do not identify user conversations.
+		// CASE avoids applying JSON path functions to plain-text sources such as vscode.
+		query += `AND CASE WHEN json_valid(source) THEN
+   source <> '"subagent"' AND json_type(source,'$.subagent') IS NULL
+   ELSE source IS NULL OR source <> 'subagent' END `
+	}
 	rows, err := db.QueryContext(ctx, query+"ORDER BY updated_at DESC,id DESC LIMIT 31", args...)
 	if err != nil {
 		return page, err

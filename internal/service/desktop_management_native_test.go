@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows || darwin
 
 package service
 
@@ -33,7 +33,11 @@ func TestDesktopNativeCatalogManagement(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	client := desktop.NewClient(desktop.Options{Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
-		return desktop.DialPipe(ctx, desktop.DefaultPipePath, func(ctx context.Context, pid uint32) error {
+		path, err := desktop.DefaultEndpoint()
+		if err != nil {
+			return nil, err
+		}
+		return desktop.DialPipe(ctx, path, func(ctx context.Context, pid uint32) error {
 			_, err := windowsapp.Inspect(ctx, pid, account.Uid)
 			return err
 		})
@@ -100,7 +104,7 @@ func TestDesktopNativeCatalogManagement(t *testing.T) {
 	thread := sharedProbeObject(sharedProbeObject(value)["thread"])
 	id, _ := thread["id"].(string)
 	cwd, _ := thread["cwd"].(string)
-	if !uuidPattern.MatchString(id) || !paritySameDirectory(cwd, root) {
+	if !uuidPattern.MatchString(id) || !desktopProbeSameDirectory(cwd, root) {
 		t.Fatal("self-created native thread identity/cwd unconfirmed")
 	}
 	t.Logf("self-created Desktop thread=%s", id)
@@ -117,7 +121,7 @@ func TestDesktopNativeCatalogManagement(t *testing.T) {
 		value, err := rpc.RequestTimeout("thread/read", map[string]any{"threadId": id, "includeTurns": false}, 5*time.Second)
 		thread := sharedProbeObject(sharedProbeObject(value)["thread"])
 		cwd, _ := thread["cwd"].(string)
-		if err != nil || thread["id"] != id || !paritySameDirectory(cwd, root) {
+		if err != nil || thread["id"] != id || !desktopProbeSameDirectory(cwd, root) {
 			t.Errorf("exact empty-thread cleanup identity unavailable: %v", err)
 			return
 		}
@@ -136,7 +140,7 @@ func TestDesktopNativeCatalogManagement(t *testing.T) {
 		t.Fatalf("native rename/readback unconfirmed; not replayed: %v", err)
 	}
 	cwd, err = surface.Archive(bound, id)
-	if err != nil || !paritySameDirectory(cwd, root) {
+	if err != nil || !desktopProbeSameDirectory(cwd, root) {
 		t.Fatalf("native archive/broadcast unconfirmed; not replayed: %v", err)
 	}
 	archived = true
@@ -162,4 +166,13 @@ func (b *desktopManagementBase) Rename(_ context.Context, id, name string) (prot
 func (b *desktopManagementBase) Archive(_ context.Context, id string) (string, error) {
 	b.archiveAttempted = true
 	return b.metadata.Archive(id)
+}
+
+func desktopProbeSameDirectory(left, right string) bool {
+	a, err := os.Stat(left)
+	if err != nil {
+		return false
+	}
+	b, err := os.Stat(right)
+	return err == nil && os.SameFile(a, b)
 }

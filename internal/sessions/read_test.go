@@ -328,3 +328,42 @@ func TestConcurrentListRowsRetainEveryReaderAndLeaveChatSlot(t *testing.T) {
 		}
 	})
 }
+
+// Return the catalog when discovery stalls; unknown status must never be reported as idle.
+type blockedCatalogIPC struct{ *readIPC }
+
+func (ipc blockedCatalogIPC) Request(ctx context.Context, method string, version int, params any, target string) (desktop.Message, error) {
+	if method == "thread-owner-discovery" {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return ipc.readIPC.Request(ctx, method, version, params, target)
+}
+
+func TestCatalogReturnsBeforeHTTPDeadlineWhenDiscoveryStalls(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h := &historyFixture{list: func(context.Context, string) (protocol.SessionPage, error) {
+			rows := make([]protocol.Session, 30)
+			for i := range rows {
+				rows[i].ID = string(rune('a' + i))
+			}
+			return protocol.SessionPage{Sessions: rows}, nil
+		}}
+		ipc := blockedCatalogIPC{readIPC: &readIPC{ipcFixture: &ipcFixture{}}}
+		s := New(Options{IPC: ipc, History: h})
+		defer s.Close()
+		start := time.Now()
+		page, err := s.List(context.Background(), "")
+		if err != nil || len(page.Sessions) != 30 || len(page.Statuses) != 30 {
+			t.Fatalf("Catalog was lost: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed != 2*time.Second {
+			t.Fatalf("Status budget was not respected: %s", elapsed)
+		}
+		for i, status := range page.Statuses {
+			if status.ID != page.Sessions[i].ID || status.Status != nil {
+				t.Fatal("Timed-out status must remain unknown")
+			}
+		}
+	})
+}

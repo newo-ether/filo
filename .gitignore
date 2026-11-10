@@ -19,3 +19,13 @@ AGENTS.md
 CLAUDE.md
 HARNESS.md
 REDLINES.md
+
+# Local code index and worktrees
+.codegraph/
+.worktrees/
+
+# Local IDE settings, system metadata, and Python caches
+.idea/
+.DS_Store
+__pycache__/
+*.py[cod]

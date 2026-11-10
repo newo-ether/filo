@@ -56,7 +56,7 @@ func assembleUserSources(config map[string]any, directory, token string, changed
 		return assembly, nil
 	}
 	sid, _ := config["desktopSid"].(string)
-	if !systemServiceSIDPattern.MatchString(sid) {
+	if !validSourceIdentity(sid) {
 		return nil, errors.New(systemServiceSIDRefusal)
 	}
 	if err := verifySourceUser(sid); err != nil {

@@ -118,7 +118,7 @@ func serveStandalone(options standaloneOptions, latch *exitLatch, gateway *stand
 	desktopEnabled := hasConfiguredSource(ids, codexDesktopSource)
 	sid, _ := config["desktopSid"].(string)
 	if _, supplied := config["desktopSid"]; supplied {
-		if !systemServiceSIDPattern.MatchString(sid) {
+		if !validSourceIdentity(sid) {
 			return errors.New(systemServiceSIDRefusal)
 		}
 		if err := verifySourceUser(sid); err != nil {

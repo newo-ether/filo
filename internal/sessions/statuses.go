@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/newo-ether/filo/internal/codex"
 	"github.com/newo-ether/filo/internal/protocol"
@@ -21,14 +22,17 @@ func (sessions *DesktopSessions) List(ctx context.Context, cursor string) (proto
 	for i, row := range page.Sessions {
 		ids[i] = row.ID
 	}
-	if err := sessions.options.IPC.Connect(ctx); err != nil {
+	// Live status supplements the catalog and must not consume the HTTP response deadline.
+	statusCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := sessions.options.IPC.Connect(statusCtx); err != nil {
 		page.Statuses = make([]protocol.SessionStatus, len(ids))
 		for i, id := range ids {
 			page.Statuses[i] = unknown(id)
 		}
 		return page, nil
 	}
-	page.Statuses, err = sessions.statuses(ctx, ids, true)
+	page.Statuses, err = sessions.statuses(statusCtx, ids, true)
 	return page, err
 }
 

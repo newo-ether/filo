@@ -38,6 +38,12 @@ func Main(arguments []string, stderr io.Writer) int {
 			return 1
 		}
 		return 0
+	case "macos-native-host":
+		if err := runNativeHost(arguments[1:]); err != nil {
+			_, _ = io.WriteString(stderr, err.Error()+"\n")
+			return 1
+		}
+		return 0
 	case "request":
 		return RunRequest(arguments[1:], nil, stderr)
 	case ClaudeExecutorRunnerArgument:

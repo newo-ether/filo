@@ -36,7 +36,7 @@ func Codex(ctx context.Context, key []byte, selectedSID, home string) (string, e
 		return "", err
 	}
 	if len(key) < 32 || len(key) > 4096 || len(selectedSID) > 184 ||
-		!sidPattern.MatchString(selectedSID) || strings.TrimSpace(home) == "" || !filepath.IsAbs(home) {
+		!validAccountIdentity(selectedSID) || strings.TrimSpace(home) == "" || !filepath.IsAbs(home) {
 		return "", ErrUnavailable
 	}
 	store, err := history.OpenIdentityFile(ctx, home, history.Catalog)

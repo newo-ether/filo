@@ -622,7 +622,8 @@ func TestReserveExecutorURLReservesALoopbackEndpoint(t *testing.T) {
 func TestNativeProcessEnvironmentLeadsPathAndDropsAppServerOverrides(t *testing.T) {
 	t.Setenv("CODEX_APP_SERVER_HOME", "C:\\elsewhere")
 	t.Setenv("Codex_App_Server_Token", "leaked")
-	environment := nativeProcessEnvironment(`C:\native\codex.exe`)
+	executable := filepath.Join(t.TempDir(), "codex")
+	environment := nativeProcessEnvironment(executable)
 	paths, overrides := 0, 0
 	leading := ""
 	for _, entry := range environment {
@@ -642,7 +643,7 @@ func TestNativeProcessEnvironmentLeadsPathAndDropsAppServerOverrides(t *testing.
 	if paths != 1 {
 		t.Fatalf("the child PATH entries = %d", paths)
 	}
-	if !strings.HasPrefix(leading, `C:\native;`) {
+	if !strings.HasPrefix(leading, filepath.Dir(executable)+string(os.PathListSeparator)) {
 		t.Fatalf("the child PATH = %q", leading)
 	}
 	if overrides != 0 {
@@ -652,8 +653,10 @@ func TestNativeProcessEnvironmentLeadsPathAndDropsAppServerOverrides(t *testing.
 
 // TestParseDesktopRuntime pins the resolver shape gate.
 func TestParseDesktopRuntime(t *testing.T) {
-	usable, err := parseDesktopRuntime(`{"Executable":"C:\\Users\\sample\\codex.exe"}`)
-	if err != nil || usable != `C:\Users\sample\codex.exe` {
+	expected := filepath.Join(t.TempDir(), "codex")
+	encoded, _ := json.Marshal(map[string]string{"Executable": expected})
+	usable, err := parseDesktopRuntime(string(encoded))
+	if err != nil || usable != expected {
 		t.Fatalf("an absolute runtime = %q, %v", usable, err)
 	}
 	for _, output := range []string{`{}`, `{"Executable":""}`, `{"Executable":"codex.exe"}`} {

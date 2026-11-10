@@ -233,7 +233,7 @@ func TestAssemblyEncryptedGatewayWithoutDesktopDoesNotConnectAuxiliary(t *testin
 	writeEntryFixtureFile(t, workerToken, testToken)
 	writeEntryFixtureFile(t, filepath.Join(directory, entryTokenName), testToken)
 	writeEntryFixtureFile(t, filepath.Join(directory, entryConfigName), string(Marshal(map[string]any{
-		"bind": "127.0.0.1", "port": port, "desktopSid": "S-1-5-21-1-2-3-1001",
+		"bind": "127.0.0.1", "port": port, "desktopSid": testSourceIdentity(),
 		"sources": []string{claudeCodeSource}, "workerUrl": private.URL, "workerTokenPath": workerToken,
 		"appServerUrl": "invalid-and-must-never-be-opened",
 	})))

@@ -8,6 +8,8 @@ Filo runs independently of Codex. Stopping or removing Filo must leave ordinary
 Codex startup, existing tasks and accepted native generation unaffected. It does
 not patch Codex, change its normal startup configuration, or automate the desktop.
 
+Experimental macOS support targets Codex Desktop on Apple Silicon. See [macOS support](docs/macos.md) for installation, validation coverage, and limitations.
+
 ## Supported clients
 
 The Windows installer discovers four clients and lets you pick any of them under
